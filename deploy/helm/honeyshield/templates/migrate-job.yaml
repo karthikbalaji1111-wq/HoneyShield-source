@@ -1,0 +1,34 @@
+# Schema migrations + runtime grants, as the schema owner, before every install/upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "hs.name" . }}-migrate
+  labels: {{- include "hs.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["sh", "-c", "alembic upgrade head && python -m app.db.privileges grant"]
+          env:
+            {{- include "hs.appEnv" . | nindent 12 }}
+            {{- include "hs.ownerEnv" . | nindent 12 }}
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]

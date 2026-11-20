@@ -1,0 +1,65 @@
+# promtool test rules prometheus-rules.test.yml
+rule_files: [prometheus-rules.yml]
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="honeyshield",instance="a"}'
+        values: '1 1 0 0 0 0'
+      - series: 'honeyshield_database_up{job="honeyshield",instance="a"}'
+        values: '1 1 1 0 0 0 0'
+      - series: 'honeyshield_alert_oldest_pending_seconds{job="honeyshield",instance="a"}'
+        values: '0 700 760 820 880 940 1000 1060'
+    alert_rule_test:
+      - { eval_time: 1m, alertname: HoneyShieldDown, exp_alerts: [] }
+      - eval_time: 5m
+        alertname: HoneyShieldDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: honeyshield, instance: a }
+            exp_annotations: { summary: "HoneyShield replica a is not being scraped", runbook: docs/operations-runbook.md }
+      - { eval_time: 3m, alertname: HoneyShieldDatabaseDown, exp_alerts: [] }
+      - eval_time: 6m
+        alertname: HoneyShieldDatabaseDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: honeyshield }
+            exp_annotations: { summary: "HoneyShield cannot query PostgreSQL: decoy hits are held at the edge and recorded when it is back" }
+      - eval_time: 7m
+        alertname: HoneyShieldAlertBacklog
+        exp_alerts:
+          - exp_labels: { severity: page, job: honeyshield }
+            exp_annotations: { summary: "Alert deliveries have been waiting more than 10 minutes" }
+  - interval: 1m
+    input_series:
+      - series: 'honeyshield_ingest_requests_total{outcome="valid_suppressed",instance="a"}'
+        values: '0 0 0 3 3'
+      - series: 'honeyshield_alert_outbox{job="honeyshield",status="DEAD",instance="a"}'
+        values: '0 0 1 1'
+      - series: 'honeyshield_http_requests_total{status="2xx",instance="a"}'
+        values: '0+100x20'
+      - series: 'honeyshield_http_requests_total{status="5xx",instance="a"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - { eval_time: 2m, alertname: HoneyShieldDecoyFlood, exp_alerts: [] }
+      - eval_time: 4m
+        alertname: HoneyShieldDecoyFlood
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "A decoy is being hammered (hits beyond the per-source evidence cap): investigate the source" }
+      - eval_time: 3m
+        alertname: HoneyShieldAlertDeliveryDead
+        exp_alerts:
+          - exp_labels: { severity: ticket, job: honeyshield }
+            exp_annotations: { summary: "An alert delivery was abandoned after retries (see /api/v1/alert-destinations/deliveries)" }
+      # 1 in 101 requests fails (< 2%): no page
+      - { eval_time: 20m, alertname: HoneyShieldHigh5xxRate, exp_alerts: [] }
+  - interval: 1m
+    input_series:
+      - series: 'honeyshield_ingest_replay_hits_total{job="honeyshield",instance="a",outcome="recorded"}'
+        values: '0 0 0 25 25 25'
+    alert_rule_test:
+      - { eval_time: 2m, alertname: HoneyShieldHitsRecoveredAfterOutage, exp_alerts: [] }
+      - eval_time: 4m
+        alertname: HoneyShieldHitsRecoveredAfterOutage
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "Decoy hits were captured at the edge during a backend outage and recorded later: review them and the outage" }

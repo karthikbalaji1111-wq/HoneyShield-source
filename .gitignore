@@ -1,0 +1,38 @@
+# Python virtual environments
+.venv/
+backend/.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+*.log
+
+
+# Local Test Certificates
+proxy/certs/
+*.crt
+*.key
+*.pem
+
+# Database backups and drill dumps contain live decoy values and evidence: never commit them
+backups/
+*.dump
+*.dump.sha256
+
+# Deployment env files (keep real secrets outside the repo; .env.example stays tracked).
+# .env.* covers .env.local written by scripts/quickstart_env.sh.
+*.env
+.env.*
+!.env.example

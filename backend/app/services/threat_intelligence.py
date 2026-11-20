@@ -1,0 +1,299 @@
+"""Threat-intelligence service operations."""
+from __future__ import annotations
+
+
+from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import DetectionEventNotFoundError
+from app.models.detection_event import DetectionEvent
+from app.repositories.detection_event import (
+    DetectionEventRepository,
+    IPActivityAggregation,
+    ThreatScoreWeights,
+)
+from app.services.base import BaseService
+
+
+@dataclass(frozen=True)
+class IPProfile:
+    """Threat-intelligence profile for one observed source IP address."""
+
+    ip_address: str
+    total_events: int
+    first_seen: datetime
+    last_seen: datetime
+    distinct_honey_tokens: int
+    distinct_projects: int
+    distinct_user_agents: int
+    threat_score: int
+
+
+@dataclass(frozen=True)
+class EventTimeline:
+    """Chronological detection-event timeline for one source IP address."""
+
+    ip_address: str
+    events: list[DetectionEvent]
+
+
+@dataclass(frozen=True)
+class ThreatSummary:
+    """Aggregate threat-intelligence summary across all observed IP addresses."""
+
+    total_events: int
+    distinct_ip_addresses: int
+    highest_threat_score: int
+    # True when the window held more than ANALYTICS_SAMPLE_EVENTS events: figures cover the most
+    # recent ones only (bounded cost at any data size).
+    sampled: bool = False
+
+
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def _analytics_budget(session):
+    """A statement timeout becomes a clear 503 instead of a generic 500."""
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.exceptions import AnalyticsUnavailableError
+    try:
+        yield
+    except OperationalError as exc:
+        if "statement timeout" not in str(exc).lower() and "canceling statement" not in str(exc).lower():
+            raise
+        session.rollback()
+        raise AnalyticsUnavailableError(
+            "Threat analytics took too long for this window; try a shorter window") from None
+
+
+class ThreatIntelligenceService(BaseService):
+    """Analyze persisted detection events without owning new persistence behavior."""
+
+    _REPEAT_EVENT_POINTS = 4
+    _MAX_REPEAT_EVENTS = 10
+    _TOKEN_POINTS = 5
+    _MAX_TOKENS = 5
+    _PROJECT_POINTS = 5
+    _MAX_PROJECTS = 4
+    _CURRENT_DAY_EVENT_POINTS = 3
+    _MAX_CURRENT_DAY_EVENTS = 5
+    _TOP_ATTACKER_COUNT = 10
+
+    last_sampled: bool = False
+
+    def __init__(self, session: Session, event_repo: DetectionEventRepository, current_user: "User" | None = None) -> None:
+        """Initialize the service with its event repository.
+
+        Args:
+            session: The request-scoped SQLAlchemy session.
+            event_repo: Repository used to retrieve detection-event activity.
+
+        Returns:
+            None.
+        """
+        super().__init__(session, current_user=current_user)
+        self.event_repo = event_repo
+
+    @property
+    def _tenant_id(self) -> int | None:
+        if self.current_user and self.current_user.role.name != "SYSTEM_ADMIN":
+            return self.current_user.tenant_id
+        return None
+
+    def get_ip_profile(self, ip_address: str) -> IPProfile:
+        """Build a threat-intelligence profile for one source IP address.
+
+        Args:
+            ip_address: Source IP address to analyze.
+
+        Returns:
+            The matching IP profile and deterministic threat score.
+
+        Raises:
+            ValidationError: If the IP address is blank.
+            DetectionEventNotFoundError: If no matching events exist.
+        """
+        self._validate_required_fields(("IP address", ip_address))
+        aggregates = self.event_repo.aggregate_by_ip(ip_address=ip_address, tenant_id=self._tenant_id)
+        if not aggregates:
+            raise DetectionEventNotFoundError(
+                f"No detection events found for IP address '{ip_address}'"
+            )
+        return self._build_ip_profile(aggregates[0])
+
+    def calculate_threat_score(
+        self,
+        total_events: int,
+        distinct_honey_tokens: int,
+        distinct_projects: int,
+        events_today: int,
+    ) -> int:
+        """Calculate a deterministic 0-100 score from observed event activity.
+
+        Args:
+            total_events: Total detection events observed for the IP address.
+            distinct_honey_tokens: Unique honey tokens triggered by the IP address.
+            distinct_projects: Unique projects reached by the IP address.
+            events_today: Matching events recorded since the current UTC day began.
+
+        Returns:
+            A score from 0 through 100.
+
+        Notes:
+            Repeats contribute 4 points each after the first event, capped at 40.
+            Tokens contribute 5 points each, capped at 25. Projects contribute 5
+            points each, capped at 20. Current-UTC-day events contribute 3 points
+            each, capped at 15.
+        """
+        repeated_events = max(total_events - 1, 0)
+        repeated_event_score = min(repeated_events, self._MAX_REPEAT_EVENTS) * (
+            self._REPEAT_EVENT_POINTS
+        )
+        token_score = min(max(distinct_honey_tokens, 0), self._MAX_TOKENS) * (
+            self._TOKEN_POINTS
+        )
+        project_score = min(max(distinct_projects, 0), self._MAX_PROJECTS) * (
+            self._PROJECT_POINTS
+        )
+        current_day_score = min(
+            max(events_today, 0), self._MAX_CURRENT_DAY_EVENTS
+        ) * self._CURRENT_DAY_EVENT_POINTS
+
+        return min(
+            100,
+            repeated_event_score + token_score + project_score + current_day_score,
+        )
+
+    def get_event_timeline(
+        self,
+        ip_address: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> EventTimeline:
+        """Return the most recent event timeline in chronological order.
+
+        Args:
+            ip_address: Source IP address whose events should be retrieved.
+            limit: Maximum number of events to return.
+            offset: Number of events to skip.
+
+        Returns:
+            A timeline containing events ordered oldest to newest.
+
+        Raises:
+            ValidationError: If the IP address is blank or pagination invalid.
+            DetectionEventNotFoundError: If no matching events exist.
+        """
+        self._validate_required_fields(("IP address", ip_address))
+        if limit < 1:
+            from app.core.exceptions import ValidationError
+            raise ValidationError("Limit must be at least 1")
+        if limit > 500:
+            from app.core.exceptions import ValidationError
+            raise ValidationError("Limit cannot exceed 500")
+        if offset < 0:
+            from app.core.exceptions import ValidationError
+            raise ValidationError("Offset cannot be negative")
+
+        events = self.event_repo.find_by_ip(
+            ip_address=ip_address,
+            limit=limit,
+            offset=offset,
+            tenant_id=self._tenant_id,
+        )
+        if not events and offset == 0:
+            raise DetectionEventNotFoundError(
+                f"No detection events found for IP address '{ip_address}'"
+            )
+        return EventTimeline(ip_address=ip_address, events=list(reversed(events)))
+
+    def get_top_attackers(self, since: datetime | None = None, limit: int = 100) -> list[IPProfile]:
+        """Return the highest-scoring observed source IP addresses.
+
+        Returns:
+            Up to ten IP profiles ordered by descending score and event count.
+        """
+        from datetime import timedelta, timezone
+        from app.core.config import get_settings
+        from app.db.session import set_query_timeout
+
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(days=30)
+
+        settings = get_settings()
+        with _analytics_budget(self.session), set_query_timeout(self.session, settings.db_analytics_timeout_ms):
+            # Ranked in SQL before LIMIT (HONEY-009), over a bounded recent window.
+            rows, self.last_sampled = self.event_repo.rank_ip_activity(
+                tenant_id=self._tenant_id, since=since, limit=limit, weights=self._score_weights(),
+                sample=settings.analytics_sample_events)
+            profiles = [self._build_ip_profile(aggregation) for aggregation in rows]
+        return sorted(
+            profiles,
+            key=lambda profile: (
+                -profile.threat_score,
+                -profile.total_events,
+                profile.ip_address,
+            ),
+        )[: self._TOP_ATTACKER_COUNT]
+
+    def get_summary(self, since: datetime | None = None) -> ThreatSummary:
+        """Return aggregate threat intelligence across all observed IP addresses.
+
+        Returns:
+            Total events, distinct source IPs, and the highest calculated score.
+        """
+        from datetime import timedelta, timezone
+        from app.core.config import get_settings
+        from app.db.session import set_query_timeout
+
+        if since is None:
+            since = datetime.now(timezone.utc) - timedelta(days=30)
+
+        settings = get_settings()
+        with _analytics_budget(self.session), set_query_timeout(self.session, settings.db_analytics_timeout_ms):
+            events, ips, sampled = self.event_repo.summarize_ip_activity(
+                tenant_id=self._tenant_id, since=since, sample=settings.analytics_sample_events)
+            top, _ = self.event_repo.rank_ip_activity(
+                tenant_id=self._tenant_id, since=since, limit=1, weights=self._score_weights(),
+                sample=settings.analytics_sample_events)
+        return ThreatSummary(
+            total_events=events,
+            distinct_ip_addresses=ips,
+            highest_threat_score=max((self._build_ip_profile(a).threat_score for a in top), default=0),
+            sampled=sampled,
+        )
+
+    def _score_weights(self) -> ThreatScoreWeights:
+        """Expose the scoring constants so SQL ranking and Python scoring cannot drift."""
+        return ThreatScoreWeights(
+            repeat_points=self._REPEAT_EVENT_POINTS,
+            max_repeat_events=self._MAX_REPEAT_EVENTS,
+            token_points=self._TOKEN_POINTS,
+            max_tokens=self._MAX_TOKENS,
+            project_points=self._PROJECT_POINTS,
+            max_projects=self._MAX_PROJECTS,
+            current_day_points=self._CURRENT_DAY_EVENT_POINTS,
+            max_current_day_events=self._MAX_CURRENT_DAY_EVENTS,
+        )
+
+    def _build_ip_profile(self, aggregation: IPActivityAggregation) -> IPProfile:
+        """Convert one repository aggregate into a scored IP profile."""
+        return IPProfile(
+            ip_address=aggregation.ip_address,
+            total_events=aggregation.total_events,
+            first_seen=aggregation.first_seen,
+            last_seen=aggregation.last_seen,
+            distinct_honey_tokens=aggregation.distinct_honey_tokens,
+            distinct_projects=aggregation.distinct_projects,
+            distinct_user_agents=aggregation.distinct_user_agents,
+            threat_score=self.calculate_threat_score(
+                total_events=aggregation.total_events,
+                distinct_honey_tokens=aggregation.distinct_honey_tokens,
+                distinct_projects=aggregation.distinct_projects,
+                events_today=aggregation.events_today,
+            ),
+        )

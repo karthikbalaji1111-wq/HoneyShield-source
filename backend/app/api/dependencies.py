@@ -1,0 +1,327 @@
+"""FastAPI dependency providers for application services."""
+from __future__ import annotations
+
+from typing import Annotated, Optional
+
+from fastapi import Depends, Header, Request
+from sqlalchemy.orm import Session
+
+from app.core.auth_exceptions import InvalidTokenError, UserNotFoundError, InactiveUserError
+from app.core.security import resolve_access_token
+from app.db.session import get_db
+from app.models.user import User
+from app.repositories.audit_log import AuditLogRepository
+from app.repositories.detection_event import DetectionEventRepository
+from app.repositories.honey_token import HoneyTokenRepository
+from app.repositories.project import ProjectRepository
+from app.repositories.tenant import TenantRepository
+from app.repositories.user_repository import UserRepository
+from app.services.audit_log import AuditLogService
+from app.services.detection_event import DetectionEventService
+from app.services.honey_token import HoneyTokenService
+from app.services.project import ProjectService
+from app.services.tenant import TenantService
+from app.services.threat_intelligence import ThreatIntelligenceService
+
+SessionDependency = Annotated[Session, Depends(get_db)]
+# Account-security operations an API key may never perform, whatever its owner's role: a
+# leaked automation key must not be able to mint keys or create/alter accounts.
+API_KEY_FORBIDDEN_PREFIXES = ("/api/v1/api-keys", "/api/v1/users")
+
+
+def get_current_user(
+    session: SessionDependency,
+    authorization: Annotated[str | None, Header()] = None,
+    request: Request = None,  # type: ignore[assignment]
+) -> User:
+    """Resolve the authenticated User from the Bearer JWT in the Authorization header.
+
+    Flow:
+        1. Extract token from "Authorization: Bearer <token>" header.
+        2. Decode and verify JWT signature and expiry.
+        3. Extract user_id from ``sub`` claim.
+        4. Load User from the database by primary key.
+        5. Verify the user account is active.
+
+    The JWT payload contains only ``sub`` (user_id as str) and ``exp``.
+    No role or tenant data is read from the token — authorization is
+    always derived from the live database state.
+
+    Raises:
+        InvalidTokenError: If the header is absent, malformed, or the JWT is invalid/expired.
+        UserNotFoundError: If the user_id from the token has no matching database record.
+        InactiveUserError: If the matched user account is disabled.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise InvalidTokenError("Missing or malformed Authorization header")
+
+    # Several dependencies of one request may resolve the caller; do it once per request so a
+    # failure is counted once and a key's budget is charged once.
+    if request is not None:
+        cached = getattr(request.state, "hs_auth", None)
+        if cached is not None and cached[0] == authorization:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
+            return cached[1]
+    try:
+        user = _resolve_caller(session, authorization, request)
+    except Exception as exc:
+        if request is not None:
+            request.state.hs_auth = (authorization, exc)
+        raise
+    if request is not None:
+        request.state.hs_auth = (authorization, user)
+    return user
+
+
+def _resolve_caller(session: Session, authorization: str, request: "Request | None") -> User:
+    raw_token = authorization[len("bearer "):].strip()
+
+    from app.services import api_keys
+    if api_keys.looks_like_api_key(raw_token):
+        if request is None:
+            raise InvalidTokenError("API keys are not accepted here")
+        from app.core.auth_exceptions import ForbiddenError
+        from app.core.config import get_settings
+        from app.core.ip_trust import extract_client_ip
+        path = request.url.path
+        if path.startswith("/auth/"):
+            raise InvalidTokenError("API keys are not accepted for account sessions")
+        if path.startswith(API_KEY_FORBIDDEN_PREFIXES):
+            raise ForbiddenError("API keys cannot manage users or API keys; sign in instead")
+        user, key = api_keys.resolve(session, raw_token, request.method,
+                                     extract_client_ip(request, get_settings()))
+        request.state.auth_method = "api_key"
+        request.state.api_key_id = key.public_id
+        return user
+
+    return resolve_access_token(raw_token, session)
+
+
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_current_session_allow_mfa_pending(
+    session: SessionDependency,
+    authorization: Annotated[str | None, Header()] = None,
+) -> tuple[User, str]:
+    """Like get_current_user, but also admits MFA-pending sessions (enrolment endpoints only)."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise InvalidTokenError("Missing or malformed Authorization header")
+    return resolve_access_token(authorization[len("bearer "):].strip(), session,
+                                allow_mfa_pending=True, with_amr=True)
+
+
+MfaPendingSession = Annotated[tuple[User, str], Depends(get_current_session_allow_mfa_pending)]
+
+
+def require_roles(*allowed_roles: "Role") -> "Callable[[User], User]":
+    """Return a FastAPI dependency that enforces role membership.
+
+    The returned dependency resolves the current user via ``get_current_user``
+    and then asserts that the user's role is one of ``allowed_roles``.
+
+    Args:
+        *allowed_roles: One or more ``Role`` enum values that are permitted.
+
+    Returns:
+        A FastAPI-compatible dependency callable that returns the ``User``
+        when authorised, or raises ``ForbiddenError`` otherwise.
+
+    Example::
+
+        SystemAdminOnly = Depends(require_roles(Role.SYSTEM_ADMIN))
+    """
+    from app.core.auth_exceptions import ForbiddenError
+    from app.models.enums import Role
+
+    def _check(user: CurrentUser, session: SessionDependency) -> User:  # type: ignore[valid-type]
+        if user.role not in allowed_roles:
+            try:
+                audit_service = get_audit_log_service(session, user)
+                audit_service.record_action(
+                    event_type="AUTHORIZATION_DENIED",
+                    severity="WARNING",
+                    message="Insufficient permissions for this operation",
+                    actor_source="api",
+                    actor_user_id=user.id,
+                    tenant_id=user.tenant_id,
+                    event_metadata={"required_roles": [r.value for r in allowed_roles], "actual_role": user.role.value},
+                )
+                session.commit()
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+            raise ForbiddenError("Insufficient permissions for this operation")
+        return user
+
+    return _check
+
+
+def _require_system_admin(user: CurrentUser, session: SessionDependency) -> User:  # type: ignore[valid-type]
+    """Dependency: allow only SYSTEM_ADMIN users.
+
+    SYSTEM_ADMIN has global scope (tenant_id = NULL) and full access to
+    all tenant management operations.
+
+    Raises:
+        ForbiddenError: If the authenticated user is not a SYSTEM_ADMIN.
+    """
+    from app.core.auth_exceptions import ForbiddenError
+    from app.models.enums import Role
+
+    if user.role != Role.SYSTEM_ADMIN:
+        try:
+            audit_service = get_audit_log_service(session, user)
+            audit_service.record_action(
+                event_type="AUTHORIZATION_DENIED",
+                severity="WARNING",
+                message="This operation requires SYSTEM_ADMIN privileges",
+                actor_source="api",
+                actor_user_id=user.id,
+                tenant_id=user.tenant_id,
+                event_metadata={"required_role": "SYSTEM_ADMIN", "actual_role": user.role.value},
+            )
+            session.commit()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        raise ForbiddenError("This operation requires SYSTEM_ADMIN privileges")
+    return user
+
+
+def _require_tenant_admin_or_above(user: CurrentUser, session: SessionDependency) -> User:  # type: ignore[valid-type]
+    """Dependency: allow SYSTEM_ADMIN or TENANT_ADMIN users.
+
+    Used for tenant-scoped management operations such as creating projects
+    and managing honey tokens within a tenant's scope.
+
+    Raises:
+        ForbiddenError: If the authenticated user is a TENANT_USER.
+    """
+    from app.core.auth_exceptions import ForbiddenError
+    from app.models.enums import Role
+
+    if user.role not in (Role.SYSTEM_ADMIN, Role.TENANT_ADMIN):
+        try:
+            audit_service = get_audit_log_service(session, user)
+            audit_service.record_action(
+                event_type="AUTHORIZATION_DENIED",
+                severity="WARNING",
+                message="This operation requires TENANT_ADMIN privileges or above",
+                actor_source="api",
+                actor_user_id=user.id,
+                tenant_id=user.tenant_id,
+                event_metadata={"required_roles": ["SYSTEM_ADMIN", "TENANT_ADMIN"], "actual_role": user.role.value},
+            )
+            session.commit()
+        except Exception:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        raise ForbiddenError("This operation requires TENANT_ADMIN privileges or above")
+    return user
+
+
+# Typed dependency aliases for use in router signatures
+from typing import Callable  # noqa: E402 — kept at bottom to avoid circular imports
+
+SystemAdminRequired = Annotated[User, Depends(_require_system_admin)]
+TenantAdminRequired = Annotated[User, Depends(_require_tenant_admin_or_above)]
+
+def get_optional_user(
+    session: SessionDependency,
+    authorization: Annotated[str | None, Header()] = None,
+    request: Request = None,  # type: ignore[assignment]
+) -> User | None:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    from fastapi import HTTPException
+
+    from app.core.auth_exceptions import ForbiddenError, MfaEnrollmentRequiredError
+    try:
+        return get_current_user(session, authorization, request)
+    except (InvalidTokenError, UserNotFoundError, InactiveUserError, MfaEnrollmentRequiredError, ForbiddenError,
+            HTTPException):
+        return None
+
+OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
+
+
+
+def get_audit_log_service(session: SessionDependency, current_user: OptionalUser = None) -> AuditLogService:
+    """Provide an audit-log service using the request-scoped session."""
+    return AuditLogService(session=session, current_user=current_user, audit_repo=AuditLogRepository(session))
+
+
+def get_tenant_service(session: SessionDependency, current_user: OptionalUser = None) -> TenantService:
+    """Provide a tenant service using the request-scoped database session."""
+    return TenantService(
+        session=session, 
+        current_user=current_user,
+        tenant_repo=TenantRepository(session),
+        audit_service=get_audit_log_service(session, current_user)
+    )
+
+
+def get_project_service(session: SessionDependency, current_user: OptionalUser = None) -> ProjectService:
+    """Provide a project service using the request-scoped database session."""
+    return ProjectService(
+        session=session,
+        current_user=current_user,
+        project_repo=ProjectRepository(session),
+        tenant_repo=TenantRepository(session),
+        audit_service=get_audit_log_service(session, current_user)
+    )
+
+
+def get_honey_token_service(session: SessionDependency, current_user: OptionalUser = None) -> HoneyTokenService:
+    """Provide a honey-token service using the request-scoped session."""
+    return HoneyTokenService(
+        session=session,
+        current_user=current_user,
+        token_repo=HoneyTokenRepository(session),
+        project_repo=ProjectRepository(session),
+        audit_service=get_audit_log_service(session, current_user)
+    )
+
+
+def get_detection_event_service(session: SessionDependency, current_user: OptionalUser = None) -> DetectionEventService:
+    """Provide a detection-event service using the request-scoped session."""
+    return DetectionEventService(
+        session=session,
+        current_user=current_user,
+        event_repo=DetectionEventRepository(session),
+        token_repo=HoneyTokenRepository(session),
+        audit_service=get_audit_log_service(session, current_user),
+    )
+
+
+def get_threat_intelligence_service(
+    session: SessionDependency,
+    current_user: OptionalUser = None,
+) -> ThreatIntelligenceService:
+    """Provide a threat-intelligence service using the request-scoped session."""
+    return ThreatIntelligenceService(
+        session=session,
+        current_user=current_user,
+        event_repo=DetectionEventRepository(session),
+    )
+
+
+
+from app.services.user_service import UserService
+
+def get_user_service(session: SessionDependency, current_user: OptionalUser = None) -> UserService:
+    """Provide a user service using the request-scoped database session."""
+    return UserService(
+        session=session,
+        current_user=current_user,
+        user_repo=UserRepository(session),
+        audit_service=get_audit_log_service(session, current_user),
+    )

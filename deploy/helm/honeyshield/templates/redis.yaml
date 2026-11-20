@@ -1,0 +1,51 @@
+{{- if .Values.redis.enabled }}
+# Ephemeral shared state (rate-limit windows, live-stream pub/sub). No persistence, no evidence.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-redis
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: {{ .Values.image.redis.repository }}:{{ .Values.image.redis.tag }}
+          imagePullPolicy: {{ .Values.image.redis.pullPolicy }}
+          # Config on stdin so the password is not in the process arguments.
+          command: ["sh", "-c", "printf 'requirepass %s\\nsave \"\"\\nappendonly no\\nmaxmemory 128mb\\nmaxmemory-policy volatile-ttl\\nprotected-mode yes\\nbind 0.0.0.0\\n' \"$REDIS_PASSWORD\" | exec redis-server -"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: REDIS_PASSWORD } }
+          ports: [{ name: redis, containerPort: 6379 }]
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { cpu: 500m, memory: 192Mi } }
+          readinessProbe:
+            exec: { command: ["sh", "-c", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"] }
+            periodSeconds: 5
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes: [{ name: data, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hs.name" . }}-redis
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 4 }}
+  ports: [{ name: redis, port: 6379, targetPort: redis }]
+{{- end }}

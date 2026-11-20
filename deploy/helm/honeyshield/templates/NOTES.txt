@@ -1,0 +1,10 @@
+HoneyShield {{ .Chart.AppVersion }} installed as "{{ .Release.Name }}".
+
+1. Point DNS for {{ .Values.hosts.control }} and {{ .Values.hosts.ingest }} at the edge service:
+     kubectl -n {{ .Release.Namespace }} get svc {{ include "hs.name" . }}-edge
+2. Create the first administrator (enrol MFA at first sign-in):
+     kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "hs.name" . }}-backend -- python -m app.bootstrap --email you@example.com
+3. Verify the deployment end to end:
+     HS_VERIFY_ADMIN_PASSWORD=... python3 scripts/verify_deployment.py --control-host {{ .Values.hosts.control }} \
+       --ingest-host {{ .Values.hosts.ingest }} --admin-email you@example.com --totp-secret-file admin.totp
+4. Console: https://{{ .Values.hosts.control }}/console/

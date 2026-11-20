@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-backend
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.backend.replicas }}
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 6 }}
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 14 }}
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: api
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          ports: [{ name: http, containerPort: 8000 }]
+          env: {{- include "hs.appEnv" . | nindent 12 }}
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.backend.resources | nindent 12 }}
+          # exec probes (not httpGet): they work under every NetworkPolicy engine.
+          readinessProbe:
+            exec:
+              command: ["python", "-c", "import os,urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/ready', headers={'Host': os.environ['CONTROL_PLANE_HOSTNAMES'].split(',')[0]}), timeout=4).read()"]
+            periodSeconds: 10
+            timeoutSeconds: 6
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os,urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/api/v1/health', headers={'Host': os.environ['CONTROL_PLANE_HOSTNAMES'].split(',')[0]}), timeout=4).read()"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 6
+          # Zero-downtime rollouts: wait for the endpoint removal to reach the edge before uvicorn
+          # stops accepting (it then finishes in-flight requests on SIGTERM).
+          lifecycle:
+            preStop: { exec: { command: ["sleep", "10"] } }
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hs.name" . }}-backend
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 4 }}
+  ports: [{ name: http, port: 8000, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "hs.name" . }}-backend
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 6 }}

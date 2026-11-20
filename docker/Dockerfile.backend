@@ -1,0 +1,60 @@
+# Pinned by digest (multi-arch index) so a rebuild cannot silently change the base; Dependabot
+# (.github/dependabot.yml, /docker) proposes the new digest weekly.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+
+WORKDIR /app/backend
+
+# pg_dump / pg_restore for the backup worker (app/workers/backup.py), from the PostgreSQL project's
+# apt repository so the major version matches the server (16, docker/Dockerfile.db). Debian's own
+# client is 17, and a 17 dump cannot be restored into a 16 server (SET transaction_timeout). The
+# repository key is pinned by checksum.
+ADD --checksum=sha256:0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76 \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc /usr/share/keyrings/pgdg.asc
+
+# Pick up Debian security fixes released after the base image was built (e.g. zlib CVEs found
+# by `docker scout cves`); rebuild regularly so this stays current.
+RUN chmod 644 /usr/share/keyrings/pgdg.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+       > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt ./requirements.txt
+# pip is needed only to build the image: removing it from the runtime layer drops the installer's
+# own CVEs from the image and leaves nothing that can fetch and install code at runtime.
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -m pip uninstall -y pip \
+    && groupadd --gid 10001 honeyshield \
+    && useradd --uid 10001 --gid honeyshield --no-create-home honeyshield \
+    && mkdir -p /evidence /evidence-archive /var/spool/honeyshield/replay-state /backups \
+    && chown 10001:10001 /evidence /evidence-archive /var/spool/honeyshield/replay-state /backups \
+    && chmod 700 /backups
+
+COPY backend/ ./
+# Licence and the notices of the open-source components this image redistributes.
+COPY LICENSE THIRD-PARTY-NOTICES.md /usr/share/doc/honeyshield/
+LABEL org.opencontainers.image.title="HoneyShield backend" \
+      org.opencontainers.image.vendor="Karthik Balaji" \
+      org.opencontainers.image.licenses="LicenseRef-HoneyShield-Proprietary" \
+      org.opencontainers.image.documentation="/usr/share/doc/honeyshield/"
+# Code is root-owned and read-only for the runtime user, whatever the host checkout's umask.
+RUN chmod -R u=rwX,go=rX /app/backend /usr/share/doc/honeyshield
+
+USER 10001:10001
+
+EXPOSE 8000
+
+# Health checks are defined per service in docker-compose.yml: the same image also runs the
+# migrate job, the alert worker and the checkpointer, which serve no HTTP.
+
+# --no-proxy-headers: client IP and scheme are resolved only by the application's trusted-proxy
+# walk (TRUSTED_PROXIES, app/core/ip_trust.py). Uvicorn's own rewriting would replace the peer
+# address before that check and, with FORWARDED_ALLOW_IPS widened, accept spoofed X-Forwarded-For.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--ws", "websockets", "--no-access-log", "--no-proxy-headers"]

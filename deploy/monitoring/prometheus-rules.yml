@@ -1,0 +1,78 @@
+# HoneyShield alerting rules (Prometheus 2.x/3.x). Scrape each backend replica's /metrics with
+# `Authorization: Bearer $METRICS_TOKEN` (job="honeyshield"). See docs/monitoring-and-slos.md.
+groups:
+  - name: honeyshield.availability
+    rules:
+      - alert: HoneyShieldDown
+        expr: up{job="honeyshield"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "HoneyShield replica {{ $labels.instance }} is not being scraped"
+          runbook: docs/operations-runbook.md
+      - alert: HoneyShieldDatabaseDown
+        expr: max by (job) (honeyshield_database_up) == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "HoneyShield cannot query PostgreSQL: decoy hits are held at the edge and recorded when it is back"
+      - alert: HoneyShieldHigh5xxRate
+        expr: |
+          sum(rate(honeyshield_http_requests_total{status="5xx"}[5m]))
+            / clamp_min(sum(rate(honeyshield_http_requests_total[5m])), 1e-9) > 0.02
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "More than 2% of HoneyShield requests fail with 5xx"
+      - alert: HoneyShieldSharedStateDown
+        expr: max by (job) (honeyshield_shared_state_up) == 0
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Redis unavailable: rate limits are per replica and the live feed is per replica"
+
+  - name: honeyshield.detection
+    rules:
+      - alert: HoneyShieldHitsRecoveredAfterOutage
+        expr: sum(increase(honeyshield_ingest_replay_hits_total{outcome="recorded"}[15m])) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "Decoy hits were captured at the edge during a backend outage and recorded later: review them and the outage"
+      - alert: HoneyShieldDecoyFlood
+        expr: sum(increase(honeyshield_ingest_requests_total{outcome="valid_suppressed"}[5m])) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "A decoy is being hammered (hits beyond the per-source evidence cap): investigate the source"
+      - alert: HoneyShieldIntegrationAuthFailures
+        expr: sum(increase(honeyshield_integration_reports_total{outcome=~"auth_.*"}[15m])) > 50
+        labels: { severity: ticket }
+        annotations:
+          summary: "Many failed customer-hook authentications: misconfigured or hostile client"
+
+  - name: honeyshield.alerting
+    rules:
+      - alert: HoneyShieldAlertBacklog
+        expr: max by (job) (honeyshield_alert_oldest_pending_seconds) > 600
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Alert deliveries have been waiting more than 10 minutes"
+      - alert: HoneyShieldAlertDeliveryDead
+        expr: max by (job) (delta(honeyshield_alert_outbox{status="DEAD"}[15m])) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "An alert delivery was abandoned after retries (see /api/v1/alert-destinations/deliveries)"
+
+  - name: honeyshield.live
+    rules:
+      - alert: HoneyShieldStreamDroppingEvents
+        expr: sum(increase(honeyshield_stream_dropped_events_total[10m])) > 100
+        labels: { severity: ticket }
+        annotations:
+          summary: "Live-feed subscribers are too slow; events dropped from their queues (alerts unaffected)"
+      - alert: HoneyShieldDbPoolExhausted
+        expr: max by (instance) (honeyshield_db_pool_checked_out) >= max by (instance) (honeyshield_db_pool_size) + max by (instance) (honeyshield_db_pool_overflow)
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "Database connection pool saturated on {{ $labels.instance }}"

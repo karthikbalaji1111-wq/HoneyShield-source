@@ -1,0 +1,31 @@
+# HoneyShield edge: nginx with the two-vhost configuration and the operator console baked in.
+# Used by Compose and by the Helm chart (deploy/helm/honeyshield); only TLS certificates are mounted.
+FROM nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598
+
+# OS security fixes; drop optional modules HoneyShield never loads (XSLT, njs, image filter, GeoIP),
+# which also removes libxml2/libxslt and their CVEs from the image. Rebuild regularly.
+RUN apk upgrade --no-cache \
+    && apk del --no-cache nginx-module-xslt nginx-module-njs nginx-module-image-filter nginx-module-geoip \
+    && rm -f /usr/lib/nginx/modules/*-debug.so
+COPY proxy/templates/ /etc/nginx/templates/
+COPY proxy/hs_proxy_headers.conf /etc/nginx/hs_proxy_headers.conf
+COPY --chmod=755 proxy/14-hs-edge-config.envsh /docker-entrypoint.d/14-hs-edge-config.envsh
+COPY --chmod=755 proxy/15-hs-resolver.sh /docker-entrypoint.d/15-hs-resolver.sh
+COPY frontend/console/ /usr/share/nginx/html/console/
+# Spool for decoy hits captured while the backend is unavailable (mount a volume here).
+# replay-state belongs to the replay worker (uid 10001), whichever image initialises the shared volume.
+RUN mkdir -p /var/spool/honeyshield/replay-state && chown 10001:10001 /var/spool/honeyshield/replay-state
+COPY LICENSE THIRD-PARTY-NOTICES.md /usr/share/doc/honeyshield/
+RUN chmod -R u=rwX,go=rX /usr/share/doc/honeyshield
+LABEL org.opencontainers.image.title="HoneyShield edge" \
+      org.opencontainers.image.vendor="Karthik Balaji" \
+      org.opencontainers.image.licenses="LicenseRef-HoneyShield-Proprietary" \
+      org.opencontainers.image.documentation="/usr/share/doc/honeyshield/"
+
+ENV HS_BACKEND_ADDR=backend:8000 HS_HTTP_PORT=80 HS_TLS_PORT=443 \
+    HS_CONTROL_CERT=server.crt HS_CONTROL_KEY=server.key \
+    HS_INGEST_CERT=server.crt HS_INGEST_KEY=server.key \
+    HS_EDGE_INGEST_RPS=20 HS_EDGE_HOOK_RPS=50 HS_EDGE_API_RPS=30 \
+    HS_DECOY_LINK_PATH=t HS_DECOY_PIXEL_PATH=px HS_DECOY_COLLECT_PATH=collect HS_DECOY_LEGACY_PATHS=true \
+    HS_CONTROL_ALLOW_CIDRS=
+EXPOSE 80 443

@@ -1,0 +1,24 @@
+# HoneyShield database image: the official PostgreSQL 16 image with Debian security updates applied.
+#
+# * Same major version and the same glibc as before, so existing data directories and their
+#   collation-dependent indexes are used as they are (no dump/restore, no reindex).
+# * Starts as the postgres user. The official entrypoint then never needs root or its gosu helper,
+#   so gosu (a Go binary flagged for its old Go runtime) is removed and the container runs with no
+#   added Linux capabilities (docker-compose.yml).
+# Pinned by multi-arch digest; Dependabot (/docker) proposes new digests weekly. Rebuild regularly so
+# the apt upgrade below stays current.
+FROM postgres:16.16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
+
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /usr/local/bin/gosu
+
+COPY LICENSE THIRD-PARTY-NOTICES.md /usr/share/doc/honeyshield/
+RUN chmod -R u=rwX,go=rX /usr/share/doc/honeyshield
+LABEL org.opencontainers.image.title="HoneyShield database" \
+      org.opencontainers.image.vendor="Karthik Balaji" \
+      org.opencontainers.image.licenses="LicenseRef-HoneyShield-Proprietary AND PostgreSQL" \
+      org.opencontainers.image.documentation="/usr/share/doc/honeyshield/"
+
+USER postgres

@@ -1,0 +1,32 @@
+.git
+.github
+.DS_Store
+.env
+
+backend/.venv
+backend/.venv*
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+frontend/node_modules/
+frontend/.next/
+dist/
+build/
+
+# Not shipped in the runtime image
+backend/tests/
+backend/integration/
+
+# Never send backups, env files or key material to the build context
+backups/
+**/*.dump
+**/*.env
+**/.env.*
+!.env.example
+**/*.key
+**/*.pem
+proxy/certs/
+scratch/

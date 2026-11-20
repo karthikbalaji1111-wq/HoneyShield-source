@@ -1,0 +1,125 @@
+# HoneyShield Helm values. Secrets never go here: create a Secret and name it in
+# secrets.existingSecret (see docs/kubernetes.md for the keys).
+
+# Published by .github/workflows/release.yml for each version tag (linux/amd64 and linux/arm64, with
+# SBOM and signed provenance). A private registry needs imagePullSecrets (docs/kubernetes.md).
+image:
+  backend: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-backend, tag: "1.3.0", pullPolicy: IfNotPresent }
+  edge: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-edge, tag: "1.3.0", pullPolicy: IfNotPresent }
+  # Valkey: BSD-licensed, Redis-protocol compatible (Redis 7.4+ is RSALv2/SSPLv1). Any Redis-compatible
+  # image works; the chart uses the redis-server / redis-cli names both ship.
+  redis: { repository: valkey/valkey, tag: "9.0.7-alpine", pullPolicy: IfNotPresent }
+imagePullSecrets: []
+
+hosts:
+  control: app.example.com       # operator API + console
+  ingest: ingest.example.com      # public decoy ingestion only
+
+secrets:
+  # Required keys: JWT_SECRET_KEY, INTEGRATION_SIGNING_KEY, MFA_SECRET_KEY, POSTGRES_PASSWORD (runtime
+  # role), POSTGRES_MIGRATION_PASSWORD (schema owner), REDIS_PASSWORD.
+  # Optional: METRICS_TOKEN, SMTP_PASSWORD, OIDC_CLIENT_SECRET, EVIDENCE_S3_SECRET_ACCESS_KEY.
+  existingSecret: honeyshield-secrets
+
+postgresql:
+  # Managed PostgreSQL (RDS, Cloud SQL, Azure Database) with PITR is recommended. Create the owner
+  # and runtime roles with docker/init-db.sh's SQL (docs/database-roles.md).
+  host: postgres.example.internal
+  port: 5432
+  database: honeyshield
+  appUser: honeyshield_app
+  ownerUser: honeyshield_owner
+
+redis:
+  enabled: true          # bundled ephemeral Redis; set false and externalUrl for a managed one
+  externalHost: ""       # host:port of an external Redis when enabled=false
+
+# Addresses allowed to set X-Forwarded-For: the edge pods. Use the cluster pod CIDR; NetworkPolicy
+# below ensures only the edge can reach the backend.
+trustedProxies: "10.42.0.0/16"
+
+backend:
+  replicas: 2
+  resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: "1", memory: 512Mi } }
+  extraEnv: {}           # non-secret settings, e.g. MFA_REQUIRED_ROLES, SMTP_HOST, OIDC_ISSUER
+worker:
+  replicas: 1
+  resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+checkpointer:
+  intervalSeconds: 900
+  persistence: { size: 1Gi, storageClass: "" }
+  resources: { requests: { cpu: 20m, memory: 64Mi }, limits: { cpu: 200m, memory: 128Mi } }
+retention:
+  # Archive-then-purge job (owner role). 0 = keep forever; otherwise >= 30. Requires s3.bucket:
+  # archives go only to the S3 Object Lock bucket (write-once).
+  eventDays: 0
+  auditDays: 0
+  schedule: "17 3 * * *"
+s3:
+  # WORM copies of checkpoints and retention archives (S3 Object Lock bucket).
+  endpoint: ""
+  bucket: ""
+  region: us-east-1
+  accessKeyId: ""
+  retentionDays: 400
+  lockMode: COMPLIANCE
+edge:
+  replicas: 2
+  service: { type: LoadBalancer, httpPort: 80, httpsPort: 443, annotations: {} }
+  # Secret of type kubernetes.io/tls (tls.crt/tls.key) covering both hosts (e.g. from cert-manager).
+  tlsSecret: honeyshield-tls
+  rateLimits: { ingestRps: 20, hookRps: 50, apiRps: 30 }
+  resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { cpu: 500m, memory: 128Mi } }
+  # Decoy hits captured while the backend is unavailable (about 1 KB each; 2Gi holds ~2 million).
+  spoolSizeLimit: 2Gi
+  replayResources: { requests: { cpu: 10m, memory: 48Mi }, limits: { cpu: 200m, memory: 128Mi } }
+
+# Your own decoy URL prefixes instead of /t/ /px/ /collect/ (docs/decoy-paths.md). 1-3 segments of
+# a-z, 0-9 and '-'. legacy: keep answering on the original prefixes for decoys made before a change.
+decoyPaths: { link: t, pixel: px, collect: collect, legacy: true }
+
+# Only these addresses may reach the operator host (console + API), comma-separated IPs/CIDRs.
+# Empty: anyone. The edge Service uses externalTrafficPolicy: Local so nginx sees real client
+# addresses; a load balancer that hides them (some L7 proxies) makes this list unusable.
+controlAllowCidrs: ""
+
+watchdog:
+  # Self-test decoy hit through the edge every intervalSeconds plus health checks; notices go to
+  # WATCHDOG_NOTIFY_WEBHOOK_URL / notifyEmail, heartbeats to WATCHDOG_HEARTBEAT_URL. The two URLs
+  # usually contain tokens, so they come from the Secret (keys WATCHDOG_NOTIFY_WEBHOOK_URL,
+  # WATCHDOG_HEARTBEAT_URL, WATCHDOG_HEARTBEAT_FAIL_URL, all optional). docs/watchdog.md.
+  enabled: true
+  intervalSeconds: 300
+  notifyEmail: ""
+  probeVerifyTls: true
+  resources: { requests: { cpu: 10m, memory: 64Mi }, limits: { cpu: 200m, memory: 128Mi } }
+
+backup:
+  # Nightly pg_dump encrypted to your age public key(s) and copied to an S3 bucket (docs/backup-and-restore.md).
+  # Kubernetes keeps no local copy: bucket and recipients are required when enabled. The secret key
+  # comes from the Secret (BACKUP_S3_SECRET_ACCESS_KEY). A managed database's own point-in-time
+  # recovery is still recommended; this is the copy you control.
+  enabled: false
+  schedule: "41 2 * * *"
+  ageRecipients: ""
+  endpoint: ""
+  bucket: ""
+  region: us-east-1
+  accessKeyId: ""
+  prefix: honeyshield-backups/
+  keepDays: 30
+  resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: "1", memory: 512Mi } }
+
+metrics:
+  # Namespace of Prometheus. When set, it may scrape each backend pod's /metrics (port 8000,
+  # Host = pod IP, Authorization: Bearer METRICS_TOKEN). Rules: deploy/monitoring/.
+  prometheusNamespace: ""
+
+networkPolicy:
+  enabled: true
+  # Where PostgreSQL lives (managed DB CIDR or in-cluster pods); egress is allowed only there.
+  databaseCidr: "0.0.0.0/0"
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: { type: RuntimeDefault }

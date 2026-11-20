@@ -1,0 +1,100 @@
+# Customer integrations (CUSTOMER_HOOK) — contract v1
+
+**Status: IMPLEMENTED and tested** (`backend/tests/integrations/test_customer_hook.py`,
+`tests/postgres/test_api_on_postgres.py`, live deployment verification). Supersedes the design in
+`api_key_detection_design.md`.
+
+Used by decoys whose use only the customer's own code can observe:
+
+| Decoy | What the customer code checks | Severity |
+|---|---|---|
+| `API_KEY` | SHA-256 of a presented credential matches a manifest entry | CRITICAL |
+| `FORM_FIELD` | the honeypot field (`field_name`) was submitted non-empty | MEDIUM |
+
+Use of a decoy key against third-party services, and decoys copied but never used, are **not
+detectable**.
+
+## 1. Credentials
+
+A TENANT_ADMIN creates a credential per project (console: *Integrations*, or
+`POST /api/v1/projects/{domain}/integrations`). The response contains `integration_id`
+(public) and `secret` (shown once; HoneyShield stores only a salt and re-derives it from
+`INTEGRATION_SIGNING_KEY`). Credentials can only fetch that project's manifest and report its
+decoys. Revoke with `POST .../integrations/{id}/revoke`; rotate by creating a new one, deploying
+it, then revoking the old one.
+
+## 2. Request signing
+
+```
+X-HS-Integration: <integration_id>
+X-HS-Timestamp:   <unix seconds>             (must be within ±300 s of server time)
+X-HS-Signature:   v1=<hex HMAC-SHA256(secret, canonical)>
+canonical = "v1\n" + METHOD + "\n" + PATH + "\n" + TIMESTAMP + "\n" + hex(SHA256(body))
+```
+PATH excludes the query string. Any authentication failure returns `401
+{"detail":"Integration authentication failed"}` regardless of cause. More than 30 failures per
+minute from one IP returns 429.
+
+## 3. Endpoints (ingest host only)
+
+`GET /integrations/v1/manifest` →
+```json
+{"version":1,"generated_at":"…","decoys":[
+  {"decoy_id":"dcy_…","token_type":"API_KEY","is_active":true,"sha256":"<hex>"},
+  {"decoy_id":"dcy_…","token_type":"FORM_FIELD","is_active":true,"field_name":"website"}]}
+```
+Revoked decoys stay listed: reuse of a retired decoy is still worth reporting.
+
+`POST /integrations/v1/events` (≤16 KiB, unknown fields rejected):
+
+| Field | Required | Rules |
+|---|---|---|
+| `decoy_id` | yes | `dcy_` + 24 hex |
+| `idempotency_key` | yes | 16-64 of `[A-Za-z0-9_-]`; same key = stored once |
+| `observed_at` | yes | RFC 3339 with timezone; within the last 24 h, ≤5 min in the future |
+| `source_ip` | yes | IPv4/IPv6 as determined by *your* trusted-proxy logic |
+| `http_method` | no | GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS |
+| `request_path` | no | path only; query and fragment are dropped |
+| `user_agent` | no | truncated to 1024 chars |
+| `headers` | no | ≤20; any name containing authorization/cookie/token/secret/password/api-key/session/credential/signature → 422 |
+
+Responses: `202 {"status":"accepted"}` for every authenticated, well-formed report — including
+duplicates, unknown decoys and decoys of other projects (no oracle). `422` for malformed reports
+or a report that contains the decoy key itself (rejected, audited, value never stored or logged).
+`429` when the per-integration rate (default 1200/min) is exceeded. Reports beyond 60/min for the
+same (decoy, source IP) are acknowledged but stored once per minute with a
+`DETECTION_HITS_SUPPRESSED` audit record.
+
+## 4. Customer-side requirements
+
+1. Make your authentication decision exactly as before; a decoy key must be rejected like any
+   invalid key. The hook never changes or delays it.
+2. Report asynchronously from a bounded queue (reference: 10,000 entries, drop-oldest only when
+   full), 2 s timeout; keep a report that cannot be delivered and retry it with exponential backoff
+   and jitter (reference: up to 60 s between rounds) until it is accepted; do not retry 4xx except 429.
+3. Derive `idempotency_key` deterministically (reference: SHA-256 of decoy|ip|minute).
+4. Never send the presented credential, `Authorization`, cookies, bodies or query strings.
+5. Keep the secret in your secret store; refresh the manifest every few minutes.
+
+The reference implementation (`integrations/python/honeyshield_hook.py`, stdlib only, Python
+3.9+) does all of the above:
+```python
+hook = HoneyShieldHook("https://ingest.example.com", os.environ["HONEYSHIELD_INTEGRATION_ID"],
+                       os.environ["HONEYSHIELD_INTEGRATION_SECRET"],
+                       spool_path="/var/lib/myapp/honeyshield-hook.jsonl")   # optional: survive restarts
+hook.start()
+...
+hook.stop()   # on shutdown: undelivered reports are saved to spool_path and sent after the next start
+hook.check_api_key(presented_key, source_ip=client_ip, http_method=method, request_path=path)
+hook.check_form(form_data, source_ip=client_ip, request_path=path)
+```
+
+## 5. Provenance and limitations
+
+Events are stored with `source = CUSTOMER_HOOK`, the reporting `integration_credential_id` and
+the idempotency key; IP, path and time are **asserted by the customer**, not observed by
+HoneyShield. A compromised customer application can suppress or forge reports for its own
+project only. An outage of HoneyShield delays reports but does not lose them: the reference client
+keeps and retries them, with the same idempotency key so nothing is stored twice. Reports are lost
+only if the queue overflows (10,000 by default) or the customer's process crashes before reporting;
+with `spool_path`, a graceful restart keeps them.

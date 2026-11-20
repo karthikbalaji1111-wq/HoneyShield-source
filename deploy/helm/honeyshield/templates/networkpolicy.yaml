@@ -1,0 +1,142 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $sel := dict "root" . }}
+# Default deny for every HoneyShield pod, then only the paths each component needs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-default-deny
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Ingress, Egress]
+---
+# DNS for every component.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-dns
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }} }
+  policyTypes: [Egress]
+  egress:
+    - ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+---
+# Edge: reachable from anywhere; talks only to the backend.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-edge
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{ port: 8080 }, { port: 8443 }]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 14 }}
+      ports: [{ port: 8000 }]
+---
+# Backend API: only the edge may connect (it is the only trusted X-Forwarded-For writer).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-backend
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "backend") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 14 }}
+      {{- with .Values.metrics.prometheusNamespace }}
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ . | quote }} }
+      {{- end }}
+      ports: [{ port: 8000 }]
+  egress:
+    - to: [{ ipBlock: { cidr: {{ .Values.networkPolicy.databaseCidr | quote }} } }]
+      ports: [{ port: {{ .Values.postgresql.port }} }]
+    - to:
+        - podSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 14 }}
+      ports: [{ port: 6379 }]
+    {{- if .Values.backend.extraEnv.OIDC_ISSUER }}
+    # SSO: the API fetches the IdP's discovery document and keys and exchanges codes (HTTPS).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [169.254.0.0/16]
+      ports: [{ port: 443 }]
+    {{- end }}
+---
+# Migration and retention jobs: database (+ S3 for retention archives).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-jobs
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}] }
+      - { key: app.kubernetes.io/component, operator: In, values: [migrate, retention] }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ ipBlock: { cidr: {{ .Values.networkPolicy.databaseCidr | quote }} } }]
+      ports: [{ port: {{ .Values.postgresql.port }} }]
+    - ports: [{ port: 443 }, { port: 9000 }]
+---
+# Worker (webhooks, SMTP, syslog), checkpointer and backup (S3) and watchdog (self-test through the
+# edge, notices, heartbeat): database, Redis and the internet.
+# The application's SSRF guard refuses private and metadata addresses for customer destinations.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-egress-workers
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}] }
+      - { key: app.kubernetes.io/component, operator: In, values: [worker, checkpointer, watchdog, backup] }
+  policyTypes: [Egress]
+  egress:
+    - to: [{ ipBlock: { cidr: {{ .Values.networkPolicy.databaseCidr | quote }} } }]
+      ports: [{ port: {{ .Values.postgresql.port }} }]
+    - to:
+        - podSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 14 }}
+      ports: [{ port: 6379 }]
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [169.254.0.0/16]
+      ports: [{ port: 443 }, { port: 8443 }, { port: 80 }, { port: 8080 }, { port: 25 }, { port: 465 },
+              { port: 587 }, { port: 6514 }, { port: 9000 }]
+---
+# Redis: only HoneyShield components.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "hs.name" . }}-redis
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "redis") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - { key: app.kubernetes.io/instance, operator: In, values: [{{ .Release.Name | quote }}] }
+              - { key: app.kubernetes.io/component, operator: In, values: [backend, worker, checkpointer] }
+      ports: [{ port: 6379 }]
+{{- end }}

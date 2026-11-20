@@ -1,0 +1,139 @@
+# nginx edge + console (docker/Dockerfile.edge): the same two-vhost configuration as Compose.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-edge
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.edge.replicas }}
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 14 }}
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: nginx
+          image: {{ .Values.image.edge.repository }}:{{ .Values.image.edge.tag }}
+          imagePullPolicy: {{ .Values.image.edge.pullPolicy }}
+          env:
+            - { name: HS_CONTROL_HOST, value: {{ .Values.hosts.control | quote }} }
+            - { name: HS_INGEST_HOST, value: {{ .Values.hosts.ingest | quote }} }
+            - { name: HS_BACKEND_ADDR, value: "{{ include "hs.name" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:8000" }
+            - { name: HS_HTTP_PORT, value: "8080" }
+            - { name: HS_TLS_PORT, value: "8443" }
+            - { name: HS_CONTROL_CERT, value: tls.crt }
+            - { name: HS_CONTROL_KEY, value: tls.key }
+            - { name: HS_INGEST_CERT, value: tls.crt }
+            - { name: HS_INGEST_KEY, value: tls.key }
+            - { name: HS_EDGE_INGEST_RPS, value: {{ .Values.edge.rateLimits.ingestRps | quote }} }
+            - { name: HS_EDGE_HOOK_RPS, value: {{ .Values.edge.rateLimits.hookRps | quote }} }
+            - { name: HS_EDGE_API_RPS, value: {{ .Values.edge.rateLimits.apiRps | quote }} }
+            - { name: HS_DECOY_LINK_PATH, value: {{ .Values.decoyPaths.link | quote }} }
+            - { name: HS_DECOY_PIXEL_PATH, value: {{ .Values.decoyPaths.pixel | quote }} }
+            - { name: HS_DECOY_COLLECT_PATH, value: {{ .Values.decoyPaths.collect | quote }} }
+            - { name: HS_DECOY_LEGACY_PATHS, value: {{ .Values.decoyPaths.legacy | quote }} }
+            - { name: HS_CONTROL_ALLOW_CIDRS, value: {{ .Values.controlAllowCidrs | quote }} }
+          ports:
+            - { name: http, containerPort: 8080 }
+            - { name: https, containerPort: 8443 }
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.edge.resources | nindent 12 }}
+          readinessProbe:
+            exec: { command: ["sh", "-c", "nc -z 127.0.0.1 8443 && nc -z 127.0.0.1 8080"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["sh", "-c", "nc -z 127.0.0.1 8443"] }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # Zero-downtime rollouts: keep serving while the endpoint removal propagates to every
+          # node's load balancer, then nginx stops gracefully (SIGQUIT, finishes open requests).
+          lifecycle:
+            preStop: { exec: { command: ["sh", "-c", "sleep 10"] } }
+          volumeMounts:
+            - { name: certs, mountPath: /etc/nginx/certs, readOnly: true }
+            - { name: confd, mountPath: /etc/nginx/conf.d }
+            - { name: cache, mountPath: /var/cache/nginx }
+            - { name: run, mountPath: /var/run }
+            - { name: tmp, mountPath: /tmp }
+            - { name: spool, mountPath: /var/spool/honeyshield }
+        # Replays decoy hits nginx captured while the backend could not record them
+        # (app/workers/ingest_replay.py). No database access: only the backend Service and the key.
+        - name: ingest-replay
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["python", "-m", "app.workers.ingest_replay"]
+          env:
+            - { name: HS_REPLAY_URL, value: "http://{{ include "hs.name" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:8000/internal/v1/ingest-replay" }
+            - { name: HS_INGEST_SPOOL, value: /var/spool/honeyshield/ingest.jsonl }
+            - { name: HS_INGEST_SPOOL_STATE, value: /var/spool/honeyshield/replay-position.json }
+            - { name: LOG_LEVEL, value: INFO }
+            - name: INTEGRATION_SIGNING_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: INTEGRATION_SIGNING_KEY } }
+          securityContext:
+            {{- include "hs.containerSecurity" . | nindent 12 }}
+            runAsUser: 10001
+            runAsGroup: 10001
+          resources: {{- toYaml .Values.edge.replayResources | nindent 12 }}
+          livenessProbe:
+            exec: { command: ["python", "-c", "import os,sys,time; p='/tmp/ingest-replay.alive'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 120 else 1)"] }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - { name: spool, mountPath: /var/spool/honeyshield }
+            - { name: replay-tmp, mountPath: /tmp }
+      volumes:
+        - { name: certs, secret: { secretName: {{ .Values.edge.tlsSecret }} } }
+        - { name: confd, emptyDir: {} }
+        - { name: cache, emptyDir: {} }
+        - { name: run, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        # Hits captured during a backend outage. Survives container restarts, not pod deletion: during
+        # an outage, avoid deleting edge pods until the spool has drained (docs/kubernetes.md).
+        - { name: spool, emptyDir: { sizeLimit: {{ .Values.edge.spoolSizeLimit }} } }
+        - { name: replay-tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hs.name" . }}-edge
+  labels: {{- include "hs.labels" . | nindent 4 }}
+  {{- with .Values.edge.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.edge.service.type }}
+  # Local: keep the client's source IP (rate limits and evidence depend on it).
+  {{- if eq .Values.edge.service.type "LoadBalancer" }}
+  externalTrafficPolicy: Local
+  {{- end }}
+  selector: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.edge.service.httpPort }}, targetPort: http }
+    - { name: https, port: {{ .Values.edge.service.httpsPort }}, targetPort: https }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "hs.name" . }}-edge
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "edge") | nindent 6 }}

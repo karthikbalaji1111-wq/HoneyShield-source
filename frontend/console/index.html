@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>HoneyShield Console</title>
+  <link rel="icon" type="image/svg+xml" href="/console/favicon.svg">
+  <link rel="stylesheet" href="/console/app.css">
+  <script src="/console/app.js" defer></script>
+</head>
+<body class="signed-out">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div id="busy" class="busy" aria-hidden="true"></div>
+
+  <header class="appbar">
+    <div class="appbar-brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path class="logo-outer" d="M12 1.8 21 7v10l-9 5.2L3 17V7z"/><path class="logo-inner" d="M12 7.2 16.2 9.6v4.8L12 16.8l-4.2-2.4V9.6z"/></svg>
+      <span class="brand-name">HoneyShield</span>
+      <span class="brand-sub">Console</span>
+    </div>
+    <div class="appbar-right">
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Colour theme: system" title="Colour theme: system">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <div id="whoami" class="user-chip" hidden>
+        <span class="avatar" id="who-avatar"></span>
+        <span class="who-text"><span id="who-email" class="who-email"></span><span id="who-role" class="who-role"></span></span>
+      </div>
+    </div>
+  </header>
+
+  <nav id="nav" class="sidebar" aria-label="Main" hidden>
+    <div class="nav-group">
+      <div class="nav-heading">Monitor</div>
+      <button data-view="overview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg><span>Overview</span></button>
+      <button data-view="events"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 8h3l2-5 4 10 2-5h3"/></svg><span>Events</span></button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-heading">Deception</div>
+      <button data-view="tokens"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5l5.5 3.2v6.6L8 14.5l-5.5-3.2V4.7z"/><path d="M8 5.2l2.6 1.5v3L8 11.2 5.4 9.7v-3z"/></svg><span>Projects &amp; decoys</span></button>
+    </div>
+    <div class="nav-group" data-admin>
+      <div class="nav-heading">Administration</div>
+      <button data-view="integrations" data-admin><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 10l4-4M4.5 7.5 3 9a2.5 2.5 0 0 0 3.5 3.5L8 11M11.5 8.5 13 7a2.5 2.5 0 0 0-3.5-3.5L8 5"/></svg><span>Integrations</span></button>
+      <button data-view="alerts" data-admin><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11V7a4 4 0 0 1 8 0v4l1.5 1.5h-11zM6.5 14.2h3"/></svg><span>Alerts</span></button>
+      <button data-view="audit" data-admin><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4h8.5M5.5 8h8.5M5.5 12h8.5M2 4h.5M2 8h.5M2 12h.5"/></svg><span>Audit log</span></button>
+      <button data-view="evidence" data-admin><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 13.5 3.5v4c0 3.5-2.5 6-5.5 7-3-1-5.5-3.5-5.5-7v-4z"/><path d="m5.6 8 1.8 1.8 3.1-3.4"/></svg><span>Evidence</span></button>
+      <button data-view="tenants" data-sysadmin><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 14.5v-11l5-2v13M7.5 5.5l6 2v7M1 14.5h14M4.5 5.5h1M4.5 8h1M4.5 10.5h1M10 9h1.5M10 11.5h1.5"/></svg><span>Tenants</span></button>
+      <button data-view="users" data-admin><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><path d="M1.5 14c0-2.5 2-4.5 4.5-4.5s4.5 2 4.5 4.5M11 2.8a2.5 2.5 0 0 1 0 4.4M12.5 9.8c1.2.6 2 2.2 2 4.2"/></svg><span>Users</span></button>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-group">
+      <button data-view="account"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.5" r="3"/><path d="M2.5 14.5c.5-3 2.8-4.5 5.5-4.5s5 1.5 5.5 4.5"/></svg><span>Account</span></button>
+    </div>
+  </nav>
+
+  <main class="content" id="main" tabindex="-1">
+    <!-- ============================================================ sign in -->
+    <section id="view-login" class="view auth-view">
+      <div class="auth-card">
+        <div class="auth-brand">
+          <svg class="logo logo-lg" viewBox="0 0 24 24" aria-hidden="true"><path class="logo-outer" d="M12 1.8 21 7v10l-9 5.2L3 17V7z"/><path class="logo-inner" d="M12 7.2 16.2 9.6v4.8L12 16.8l-4.2-2.4V9.6z"/></svg>
+          <span class="brand-name">HoneyShield</span>
+        </div>
+        <h1>Sign in</h1>
+        <p class="sub">Use your operator account.</p>
+        <form id="login-form" class="stack">
+          <label>Email <input name="email" type="email" autocomplete="username" required></label>
+          <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+          <label id="otp-row" hidden>Authenticator code or recovery code
+            <input name="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="32"></label>
+          <button type="submit" class="block">Sign in</button>
+          <button id="passkey-signin" type="button" class="secondary block" hidden>Use my passkey</button>
+        </form>
+        <div id="sso-row" class="stack" hidden>
+          <div class="divider"><span>or</span></div>
+          <a id="sso-button" class="button secondary block" href="/auth/oidc/login">Sign in with SSO</a>
+        </div>
+        <button id="forgot-link" class="link" type="button">Forgot your password?</button>
+      </div>
+      <p class="auth-foot">Access is logged. Sessions end when you close this tab.</p>
+    </section>
+
+    <!-- ============================================================ forgot password -->
+    <section id="view-forgot" class="view auth-view" hidden>
+      <div class="auth-card">
+        <h1>Reset your password</h1>
+        <p class="sub">Enter your account email. If it exists, we send a link that works once for 30 minutes.
+          If email is not set up on this deployment, ask an administrator for a reset link.</p>
+        <form id="forgot-form" class="stack">
+          <label>Email <input name="email" type="email" autocomplete="username" required maxlength="254"></label>
+          <button type="submit" class="block">Send reset link</button>
+        </form>
+        <button class="link back-to-login" type="button">Back to sign in</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ choose a new password -->
+    <section id="view-reset" class="view auth-view" hidden>
+      <div class="auth-card">
+        <h1>Choose a new password</h1>
+        <p class="sub">At least 12 characters. Every existing session is signed out. Two-factor authentication stays on.</p>
+        <form id="reset-form" class="stack">
+          <label>New password <input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="72" required></label>
+          <label>Repeat it <input name="confirm" type="password" autocomplete="new-password" minlength="12" maxlength="72" required></label>
+          <button type="submit" class="block">Set password</button>
+        </form>
+        <button class="link back-to-login" type="button">Back to sign in</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ MFA enrolment -->
+    <section id="view-mfa" class="view auth-view" hidden>
+      <div class="auth-card wide">
+        <h1>Set up two-factor authentication</h1>
+        <p id="mfa-intro" class="sub">Your role requires two-factor authentication. Until you finish, this
+          session can only be used to enrol.</p>
+        <form id="mfa-passkey-form" class="stack subsection" hidden>
+          <div><h3>Use a passkey (recommended)</h3>
+            <p class="hint">Your device's fingerprint, face or PIN, or a security key. A passkey only works on this
+              site, so a fake sign-in page cannot steal it.</p></div>
+          <label>Confirm your password <input name="current_password" type="password" autocomplete="current-password" required></label>
+          <label>Name this passkey <input name="name" maxlength="64" required placeholder="e.g. Work laptop"></label>
+          <button type="submit" class="block">Create a passkey</button>
+        </form>
+        <h3 id="mfa-totp-heading" class="subsection">Or use an authenticator app</h3>
+        <form id="mfa-setup-form" class="stack">
+          <label>Confirm your password <input name="current_password" type="password" autocomplete="current-password" required></label>
+          <button type="submit" class="block">Generate secret</button>
+        </form>
+        <div id="mfa-secret" class="stack" hidden>
+          <div class="step"><span class="step-n">1</span><div>
+            <p>Add this key to your authenticator app (Google Authenticator, 1Password, Authy, …).</p>
+            <pre id="mfa-secret-key" class="code code-lg"></pre>
+            <p class="hint">Or open this link on a phone with an authenticator installed:</p>
+            <pre id="mfa-secret-uri" class="code"></pre>
+          </div></div>
+          <div class="step"><span class="step-n">2</span><div>
+            <form id="mfa-enable-form" class="stack">
+              <label>Enter the 6-digit code from the app <input name="code" inputmode="numeric" autocomplete="one-time-code"
+                pattern="[0-9]{6}" maxlength="6" required></label>
+              <button type="submit" class="block">Turn on MFA</button>
+            </form>
+          </div></div>
+        </div>
+        <div id="mfa-codes" class="stack" hidden>
+          <div class="callout warn"><strong>Save your recovery codes.</strong> Each works once if you lose your phone.
+            They are shown only now: store them in your password manager.</div>
+          <pre id="mfa-codes-list" class="code code-lg"></pre>
+          <button id="mfa-continue" type="button" class="block">I have saved them, continue</button>
+        </div>
+        <button id="mfa-signout" class="link" type="button">Sign out</button>
+      </div>
+    </section>
+
+    <!-- ============================================================ overview -->
+    <section id="view-overview" class="view" hidden>
+      <div class="page-head"><div><h1>Overview</h1><p class="sub">Detection activity across your decoys.</p></div></div>
+      <div id="ov-stats" class="tiles"></div>
+      <p id="ov-sampled" class="hint" hidden></p>
+      <div class="panel">
+        <div class="panel-head"><h2>Detections</h2><span class="panel-meta">Last 14 days · UTC</span></div>
+        <div class="activity">
+          <div id="ov-activity" class="chart" role="img" aria-label="Detections per day, last 14 days"></div>
+          <div id="ov-mix" class="mix"></div>
+        </div>
+      </div>
+      <div class="panel" id="health-panel" data-sysadmin hidden>
+        <div class="panel-head"><h2>System health</h2><span id="health-meta" class="panel-meta"></span></div>
+        <div id="health-body"></div>
+      </div>
+      <div class="cols">
+        <div class="panel">
+          <div class="panel-head"><h2>Top attackers</h2></div>
+          <div id="ov-top"></div>
+          <p class="panel-foot">Threat scores are deterministic heuristics over event counts and severity, not machine learning.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Live feed</h2><span id="live-state" class="badge">offline</span></div>
+          <ul id="live" class="feed"><li class="feed-empty">Waiting for detections…</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ projects & decoys -->
+    <section id="view-tokens" class="view" hidden>
+      <div class="page-head"><div><h1>Projects &amp; decoys</h1><p class="sub">Each project is a protected domain. Decoys are planted artifacts that only an intruder would touch.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Projects</h2></div>
+        <form id="project-form" data-admin class="form-grid">
+          <label>Name
+            <input name="name" required maxlength="255" autocomplete="off" placeholder="Customer portal"></label>
+          <label>Domain it protects
+            <input name="domain" required maxlength="253" autocomplete="off" spellcheck="false" placeholder="app.example.com"></label>
+          <label data-sysadmin>Tenant
+            <select name="tenant_slug" class="tenant-select"></select></label>
+          <div class="form-actions"><button type="submit">Add project</button></div>
+        </form>
+        <div id="projects"></div>
+      </div>
+      <div class="panel" id="token-panel" hidden>
+        <div class="panel-head"><h2>Decoys in <span id="tok-project" class="mono-inline"></span></h2>
+          <span id="tokens-note" class="toolbar-note" aria-live="polite"></span></div>
+        <form id="generate-form" data-admin class="toolbar">
+          <select name="token_type" aria-label="Decoy type">
+            <option value="URL">Hidden URL</option>
+            <option value="LINK">Hidden link</option>
+            <option value="PIXEL">Tracking pixel</option>
+            <option value="FORM_FIELD">Form honeypot (needs integration)</option>
+            <option value="API_KEY">Fake API key (needs integration)</option>
+          </select>
+          <select name="provider_style" aria-label="Key style" hidden>
+            <option value="">Generic key format</option><option value="stripe">Looks like a Stripe key</option><option value="openai">Looks like an OpenAI key</option>
+          </select>
+          <button type="submit">Generate decoy</button>
+        </form>
+        <div id="artifact" class="callout artifact" hidden></div>
+        <div id="tokens"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ events -->
+    <section id="view-events" class="view" hidden>
+      <div class="page-head"><div><h1>Events</h1><p class="sub">Every recorded interaction with a decoy, newest first.</p></div>
+        <button id="events-export" class="secondary" type="button">Export CSV</button></div>
+      <div class="panel">
+        <form id="events-filter" class="toolbar" role="search" aria-label="Filter events">
+          <select name="severity" aria-label="Severity">
+            <option value="">All severities</option><option value="CRITICAL">Critical</option>
+            <option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option>
+          </select>
+          <input name="ip" placeholder="Source IP, e.g. 203.0.113.7" maxlength="64" aria-label="Source IP address" autocomplete="off" spellcheck="false">
+          <select name="range" aria-label="Time range">
+            <option value="">All time</option><option value="1">Last 24 hours</option>
+            <option value="7">Last 7 days</option><option value="30">Last 30 days</option>
+          </select>
+          <input type="hidden" name="decoy_id">
+          <span id="events-decoy" class="chip" hidden></span>
+          <button type="submit" class="secondary">Apply</button>
+          <button type="reset" id="events-clear" class="link" hidden>Clear filters</button>
+          <span id="events-note" class="toolbar-note" aria-live="polite"></span>
+        </form>
+        <div id="events"></div>
+        <div class="panel-foot">
+          <button id="events-more" class="secondary" hidden>Load older</button>
+          <p class="legend"><strong>Source</strong> PUBLIC_INGEST: observed by HoneyShield · CUSTOMER_HOOK: reported by your
+            integration (IP and time asserted by you) · MANUAL: entered by a user · LEGACY_UNVERIFIED: recorded before provenance existed.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================ integrations -->
+    <section id="view-integrations" class="view" hidden>
+      <div class="page-head"><div><h1>Integrations</h1><p class="sub">Report-only credentials for the customer detection hook (API_KEY and FORM_FIELD decoys). The secret is shown once.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Credentials</h2></div>
+        <form id="integration-form" class="toolbar">
+          <select name="project" id="int-project" aria-label="Project"></select>
+          <input name="label" placeholder="Label, e.g. auth-service" maxlength="255" aria-label="Label">
+          <button type="submit">Create credential</button>
+        </form>
+        <div id="int-secret" class="callout warn" hidden></div>
+        <div id="integrations"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ alerts -->
+    <section id="view-alerts" class="view" hidden>
+      <div class="page-head"><div><h1>Alerts</h1><p class="sub">Where alerts go when a decoy fires: signed webhooks, Slack or Teams, email, or a SIEM over syslog.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Destinations</h2></div>
+        <form id="alert-form" class="form-grid">
+          <label>Type
+            <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option></select></label>
+          <label class="span-2">Address
+            <input name="url" required maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="alert-url-hint">
+            <span id="alert-url-hint" class="hint"></span></label>
+          <label><span>Name <span class="hint">optional</span></span>
+            <input name="label" maxlength="255" placeholder="e.g. SOC on-call" autocomplete="off"></label>
+          <label>Send
+            <select name="min_severity"><option value="LOW">Every event</option><option value="MEDIUM" selected>Medium and above</option><option value="HIGH">High and above</option><option value="CRITICAL">Critical only</option></select></label>
+          <label data-sysadmin>Tenant
+            <select name="tenant_slug" class="tenant-select"></select></label>
+          <div class="form-actions"><button type="submit">Add destination</button></div>
+        </form>
+        <div id="alert-secret" class="callout warn" hidden></div>
+        <div id="destinations"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Recent deliveries</h2></div>
+        <div id="deliveries"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ audit -->
+    <section id="view-audit" class="view" hidden>
+      <div class="page-head"><div><h1>Audit log</h1><p class="sub">Security-relevant actions by users and services.</p></div></div>
+      <div class="panel">
+        <form id="audit-form" class="toolbar" role="search" aria-label="Filter the audit log">
+          <select name="event_type" id="audit-type" aria-label="Event type"><option value="">All events</option></select>
+          <span id="audit-note" class="toolbar-note" aria-live="polite"></span>
+        </form>
+        <div id="audit"></div>
+        <div class="panel-foot"><button id="audit-more" class="secondary" hidden>Load older</button></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ evidence -->
+    <section id="view-evidence" class="view" hidden>
+      <div class="page-head"><div><h1>Evidence</h1><p class="sub">Recomputes the tenant's hash chain from stored events. Compare the head with an exported
+          checkpoint to detect a rewrite by a database administrator.</p></div></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Detection events</h2></div>
+        <div class="toolbar">
+          <select id="ev-tenant" class="tenant-select" data-sysadmin aria-label="Tenant"></select>
+          <button id="ev-verify" type="button">Verify now</button>
+          <span class="toolbar-note">Reads every event; large tenants take a few seconds.</span>
+        </div>
+        <div id="ev-result" aria-live="polite"></div>
+      </div>
+      <div class="panel" data-sysadmin>
+        <div class="panel-head"><h2>Audit log</h2></div>
+        <div class="toolbar">
+          <button id="audit-verify" type="button">Verify now</button>
+          <span class="toolbar-note">Covers sealed records; the newest are sealed within a minute.</span>
+        </div>
+        <div id="audit-verify-result" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ tenants -->
+    <section id="view-tenants" class="view" hidden>
+      <div class="page-head"><div><h1>Tenants</h1><p class="sub">Each customer organisation is a tenant: its own projects, decoys,
+          users, alert destinations and evidence chain.</p></div>
+        <button id="tenant-add" type="button" aria-expanded="false" aria-controls="tenant-form">Add tenant</button></div>
+      <div class="panel">
+        <form id="tenant-form" class="form-grid" hidden>
+          <label class="span-2">Name
+            <input name="name" required maxlength="255" autocomplete="off" placeholder="Acme Corporation"></label>
+          <label>Slug
+            <input name="slug" required minlength="2" maxlength="63" pattern="[a-z0-9]([a-z0-9\-]*[a-z0-9])?" autocomplete="off"
+                   spellcheck="false" placeholder="acme" aria-describedby="tenant-slug-hint">
+            <span id="tenant-slug-hint" class="hint">Lower-case letters, digits and hyphens. Permanent.</span></label>
+          <div class="form-actions"><button type="button" class="link" id="tenant-cancel">Cancel</button>
+            <button type="submit">Create tenant</button></div>
+        </form>
+        <div id="tenants-table"></div>
+        <div class="panel-foot"><p class="legend">Next, add the tenant's first admin on <strong>Users</strong>. Deactivating a tenant
+          signs its users out for good and refuses its integration hooks; hits on its decoys are still recorded as evidence.</p></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ users -->
+    <section id="view-users" class="view" hidden>
+      <div class="page-head"><div><h1>Users</h1><p class="sub">Operator accounts in your scope.</p></div>
+        <button id="user-add" type="button" aria-expanded="false" aria-controls="user-form">Add user</button></div>
+      <div class="panel">
+        <form id="user-form" class="form-grid" hidden>
+          <label class="span-2">Email
+            <input name="email" type="email" required maxlength="254" autocomplete="off" spellcheck="false" placeholder="name@company.com"></label>
+          <label>Role
+            <select name="role">
+              <option value="TENANT_USER">Tenant user (read only)</option>
+              <option value="TENANT_ADMIN">Tenant admin</option>
+              <option value="SYSTEM_ADMIN" data-sysadmin>System admin</option>
+            </select></label>
+          <label data-sysadmin id="user-tenant-field">Tenant
+            <select name="tenant_slug" class="tenant-select"></select></label>
+          <p class="hint span-2">No password is set here: you get a one-time set-up link to give the person.
+            Admin roles must set up two-factor authentication at first sign-in.</p>
+          <div class="form-actions"><button type="button" class="link" id="user-cancel">Cancel</button>
+            <button type="submit">Create user</button></div>
+        </form>
+        <div id="user-created" class="callout warn" hidden></div>
+        <div id="users-table"></div>
+      </div>
+      <div class="panel" id="mfa-reset-panel" hidden>
+        <div class="panel-head"><h2>Reset MFA</h2></div>
+        <p class="panel-text">Use when someone loses their authenticator: it signs them out everywhere and they enrol again
+          at next sign-in. The reason is kept in the audit log.</p>
+        <form id="mfa-reset-form" class="toolbar">
+          <select name="user_id" required aria-label="User whose MFA to reset"></select>
+          <input name="reason" class="grow" minlength="10" maxlength="1000" required placeholder="Reason (audited), e.g. lost phone, identity verified" aria-label="Reason">
+          <button type="submit" class="danger">Reset MFA</button>
+        </form>
+      </div>
+      <div class="panel" id="pw-reset-panel" hidden>
+        <div class="panel-head"><h2>Password reset link</h2></div>
+        <p class="panel-text">Creates a link that works once within 30 minutes. Give it to the person through a channel you trust.
+          It changes nothing until they use it and does not remove their MFA. The reason is kept in the audit log.</p>
+        <form id="pw-reset-form" class="toolbar">
+          <select name="user_id" required aria-label="User who needs a password reset link"></select>
+          <input name="reason" class="grow" minlength="10" maxlength="1000" required placeholder="Reason (audited), e.g. forgot password, identity verified by phone" aria-label="Reason">
+          <button type="submit" class="secondary">Create link</button>
+        </form>
+        <div id="pw-reset-result" class="callout warn" hidden></div>
+      </div>
+    </section>
+
+    <!-- ============================================================ account -->
+    <section id="view-account" class="view" hidden>
+      <div class="page-head"><div><h1>Account</h1><p class="sub">Sign-in security for your operator account.</p></div></div>
+      <div class="panel narrow">
+        <div class="panel-head"><h2>Two-factor authentication</h2></div>
+        <div id="mfa-status" class="panel-body stack">
+          <p id="mfa-status-text"></p>
+          <div><button id="mfa-start" type="button" hidden>Set up MFA</button></div>
+          <form id="mfa-regen-form" class="stack subsection" hidden>
+            <div><h3>Recovery codes</h3>
+              <p class="hint">Issues a new set of one-time codes. Your previous codes stop working.</p></div>
+            <label>Authenticator code <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
+            <div><button type="submit" class="secondary">Generate new recovery codes</button></div>
+          </form>
+          <form id="mfa-disable-form" class="stack subsection" hidden>
+            <div><h3>Turn off two-factor authentication</h3>
+              <p class="hint">Signs you out on every device. Your role decides whether this is allowed.</p></div>
+            <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
+            <label>Authenticator or recovery code <input name="code" maxlength="32" required></label>
+            <div><button type="submit" class="danger">Turn off MFA</button></div>
+          </form>
+        </div>
+      </div>
+      <div class="panel narrow">
+        <div class="panel-head"><h2>Passkeys</h2></div>
+        <div class="panel-body stack">
+          <p class="hint">Sign in with your device's fingerprint, face or PIN, or a security key, after your password.
+            Unlike authenticator codes, a passkey cannot be phished: it only works on this site. Add two (for example
+            laptop and phone) so losing one does not lock you out. With a passkey you can turn the authenticator
+            app off.</p>
+          <p id="passkey-unsupported" class="callout warn" hidden>This browser does not support passkeys.</p>
+          <div id="passkey-table"></div>
+          <form id="passkey-add-form" class="stack subsection">
+            <div><h3>Add a passkey</h3></div>
+            <label>Name <input name="name" maxlength="64" required placeholder="e.g. Work laptop"></label>
+            <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
+            <div><button type="submit" class="secondary">Add passkey</button></div>
+          </form>
+          <form id="passkey-remove-form" class="stack subsection" hidden>
+            <div><h3>Remove <span id="passkey-remove-name"></span></h3></div>
+            <input type="hidden" name="id">
+            <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
+            <div class="toolbar"><button type="submit" class="danger">Remove passkey</button>
+              <button id="passkey-remove-cancel" type="button" class="secondary">Cancel</button></div>
+          </form>
+        </div>
+      </div>
+      <div class="panel narrow">
+        <div class="panel-head"><h2>Password</h2></div>
+        <form id="password-form" class="panel-body stack">
+          <label>Current password <input name="current_password" type="password" autocomplete="current-password" required></label>
+          <label><span>New password <span class="hint">(12+ characters)</span></span><input name="new_password" type="password" autocomplete="new-password" minlength="12" required></label>
+          <div><button type="submit">Change password</button></div>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>API keys</h2></div>
+        <p class="panel-text">For scripts, CI pipelines and SIEM pull jobs. A key acts as you (your role and tenant), never
+          as an administrator of accounts: it cannot manage users or other keys. Read keys can only fetch data.
+          The key is shown once; it is stored only as a hash.</p>
+        <form id="key-form" class="toolbar">
+          <input name="name" class="grow" required maxlength="100" placeholder="What uses this key, e.g. SIEM pull job" aria-label="Key name">
+          <select name="scope" aria-label="Scope"><option value="read">Read only</option><option value="write">Read and write</option></select>
+          <select name="expires_in_days" aria-label="Expiry"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="180">180 days</option><option value="365">1 year</option></select>
+          <button type="submit" class="secondary">Create key</button>
+        </form>
+        <div id="key-secret" class="callout warn" hidden></div>
+        <div id="keys-table"></div>
+      </div>
+      <div class="panel narrow">
+        <div class="panel-head"><h2>Sessions</h2></div>
+        <div class="panel-body row-between">
+          <p>Sign out of this console on every device.</p>
+          <button id="logout" class="danger">Sign out everywhere</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <div id="event-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <div class="drawer-head">
+      <h2 id="drawer-title">Event</h2>
+      <button id="drawer-close" class="theme-toggle drawer-close" type="button" aria-label="Close details">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </div>
+    <div id="event-detail" class="drawer-body"></div>
+  </div>
+
+  <div id="status" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-worker
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "worker") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 25
+      containers:
+        - name: worker
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["python", "-m", "app.workers.outbox"]
+          env: {{- include "hs.appEnv" . | nindent 12 }}
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "hs.name" . }}-checkpoints
+  labels: {{- include "hs.labels" . | nindent 4 }}
+  annotations: { helm.sh/resource-policy: keep }
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.checkpointer.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.checkpointer.persistence.size }} } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-checkpointer
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "checkpointer") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "checkpointer") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: checkpointer
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          # Exit 3 = written locally, S3 upload failed: keep looping (next cycle uploads it).
+          command: ["sh", "-c", "while true; do python -m app.workers.evidence checkpoint --out /evidence; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 3 ] || exit $rc; sleep {{ .Values.checkpointer.intervalSeconds }}; done"]
+          env:
+            {{- include "hs.appEnv" . | nindent 12 }}
+            {{- include "hs.s3Env" . | nindent 12 }}
+            - { name: HS_CHECKPOINT_STATUS_FILE, value: /tmp/hs-checkpoint-ok }
+            - { name: HS_CHECKPOINT_INTERVAL_SECONDS, value: {{ .Values.checkpointer.intervalSeconds | quote }} }
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.checkpointer.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os,sys,time; p=os.environ['HS_CHECKPOINT_STATUS_FILE']; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3*int(os.environ['HS_CHECKPOINT_INTERVAL_SECONDS']) else 1)"]
+            initialDelaySeconds: 120
+            periodSeconds: 60
+            timeoutSeconds: 10
+          volumeMounts:
+            - { name: evidence, mountPath: /evidence }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: evidence, persistentVolumeClaim: { claimName: {{ include "hs.name" . }}-checkpoints } }
+        - { name: tmp, emptyDir: {} }
+{{- $retention := or (gt (int .Values.retention.eventDays) 0) (gt (int .Values.retention.auditDays) 0) }}
+{{- if and $retention (not .Values.s3.bucket) }}
+{{- fail "retention needs s3.bucket: in Kubernetes, archives are written only to the S3 Object Lock bucket (write-once)" }}
+{{- end }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "hs.name" . }}-retention
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.retention.schedule | quote }}
+  suspend: {{ not $retention }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: {{- include "hs.selector" (dict "root" . "component" "retention") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: retention
+              image: {{ include "hs.backendImage" . }}
+              command: ["python", "-m", "app.workers.retention"]
+              env:
+                {{- include "hs.appEnv" . | nindent 16 }}
+                {{- include "hs.s3Env" . | nindent 16 }}
+                {{- include "hs.ownerEnv" . | nindent 16 }}
+                - { name: EVENT_RETENTION_DAYS, value: {{ .Values.retention.eventDays | quote }} }
+                - { name: AUDIT_RETENTION_DAYS, value: {{ .Values.retention.auditDays | quote }} }
+                - { name: RETENTION_ARCHIVE_DIR, value: /tmp/unused-archive }  # S3 is required here
+              securityContext: {{- include "hs.containerSecurity" . | nindent 16 }}
+              volumeMounts: [{ name: tmp, mountPath: /tmp }]
+          volumes: [{ name: tmp, emptyDir: {} }]

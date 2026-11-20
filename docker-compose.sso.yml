@@ -1,0 +1,9 @@
+# Single sign-on needs the API to reach the identity provider (discovery, signing keys, code
+# exchange over HTTPS). By default the API has no internet egress; with SSO on, add this file:
+#   docker compose --env-file prod.env -f docker-compose.yml -f docker-compose.sso.yml up -d
+# The IdP URL is operator configuration (OIDC_ISSUER), never tenant input.
+services:
+  backend:
+    networks:
+      - internal_net
+      - egress_net

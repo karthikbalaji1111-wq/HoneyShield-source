@@ -1,0 +1,476 @@
+# HoneyShield production topology (single host). See docs/deployment-guide.md.
+#
+#   internet ──► nginx (TLS, two vhosts, edge rate limits)   [public_net + internal_net]
+#                 ├─ HS_CONTROL_HOST ─► backend (operator API, streaming, console)
+#                 └─ HS_INGEST_HOST  ─► backend (/t /px /collect /integrations/v1 only)
+#   backend ×N ──► postgres + redis          [internal_net: no internet]; N = HS_BACKEND_REPLICAS
+#   redis   shared rate-limit windows + live-stream pub/sub (ephemeral, no evidence)
+#   worker  ──► postgres + customer webhooks / SMTP / syslog [internal_net + egress_net]
+#   migrate (one-shot, schema owner) ─► alembic upgrade head + runtime grants
+#   checkpointer ─► signed checkpoints into evidence_checkpoints, then S3 Object Lock
+#   watchdog ─► self-test hit through the edge every 5 min, health checks, operator notices and a
+#               heartbeat to an outside dead-man's switch (docs/watchdog.md)
+#   backup   ─► nightly pg_dump, encrypted to your age key, copied to any S3 bucket (docs/backup-and-restore.md)
+#
+# Every value comes from an explicit env file:  docker compose --env-file prod.env up -d
+# There are no default secrets; missing required values abort `docker compose up`.
+
+x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:?Provide POSTGRES_DB}
+  # Runtime identity: least-privilege role (HONEY-002). Never the bootstrap superuser.
+  POSTGRES_USER: ${HS_APP_DB_USER:-honeyshield_app}
+  POSTGRES_PASSWORD: ${HS_APP_DB_PASSWORD:?Provide HS_APP_DB_PASSWORD}
+  POSTGRES_APP_USER: ${HS_APP_DB_USER:-honeyshield_app}
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Provide JWT_SECRET_KEY (openssl rand -hex 32)}
+  INTEGRATION_SIGNING_KEY: ${INTEGRATION_SIGNING_KEY:?Provide INTEGRATION_SIGNING_KEY (openssl rand -hex 32)}
+  MFA_SECRET_KEY: ${MFA_SECRET_KEY:?Provide MFA_SECRET_KEY (openssl rand -hex 32)}
+  MFA_REQUIRED_ROLES: ${MFA_REQUIRED_ROLES:-}
+  PUBLIC_INGEST_BASE_URL: https://${HS_INGEST_HOST:?Provide HS_INGEST_HOST}
+  CONTROL_PLANE_HOSTNAMES: ${HS_CONTROL_HOST:?Provide HS_CONTROL_HOST}
+  # Only the nginx container's fixed address may set X-Forwarded-For (HONEY-005).
+  TRUSTED_PROXIES: ${HS_NGINX_IP:-172.28.0.10}
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+  SECURITY_HEADERS_HSTS_ENABLED: ${SECURITY_HEADERS_HSTS_ENABLED:-true}
+  METRICS_TOKEN: ${METRICS_TOKEN:-}
+  # Alert channels: EMAIL needs the SMTP relay; private SIEM/webhook networks must be allowed
+  # explicitly (self-hosted only).
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_SECURITY: ${SMTP_SECURITY:-starttls}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
+  ALERT_ALLOWED_PRIVATE_CIDRS: ${ALERT_ALLOWED_PRIVATE_CIDRS:-}
+  # Single sign-on (OIDC). Unset OIDC_ISSUER: SSO off. See docs/sso.md.
+  OIDC_ISSUER: ${OIDC_ISSUER:-}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+  OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+  OIDC_DISPLAY_NAME: ${OIDC_DISPLAY_NAME:-Single sign-on}
+  OIDC_EMAIL_CLAIM: ${OIDC_EMAIL_CLAIM:-email}
+  OIDC_REQUIRE_EMAIL_VERIFIED: ${OIDC_REQUIRE_EMAIL_VERIFIED:-true}
+  OIDC_MFA: ${OIDC_MFA:-amr_claim}
+  OIDC_CA_FILE: ${OIDC_CA_FILE:-}  # only for an IdP with a private CA (mount the file)
+  # Shared rate limits + live-stream fan-out across backend replicas (HONEY-026).
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Provide REDIS_PASSWORD (openssl rand -hex 32)}@redis:6379/0
+  ENFORCE_DB_LEAST_PRIVILEGE: ${ENFORCE_DB_LEAST_PRIVILEGE:-true}
+  # Decoy URL paths (docs/decoy-paths.md): choose your own so decoys do not look like HoneyShield.
+  DECOY_LINK_PATH: ${HS_DECOY_LINK_PATH:-t}
+  DECOY_PIXEL_PATH: ${HS_DECOY_PIXEL_PATH:-px}
+  DECOY_COLLECT_PATH: ${HS_DECOY_COLLECT_PATH:-collect}
+  DECOY_LEGACY_PATHS: ${HS_DECOY_LEGACY_PATHS:-true}
+  # Only these addresses may use the console and API (comma-separated IPs/CIDRs; empty: anyone).
+  CONTROL_PLANE_ALLOWED_CIDRS: ${HS_CONTROL_ALLOW_CIDRS:-}
+  # Passkeys are bound to this host name (default: HS_CONTROL_HOST).
+  WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
+  WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+
+# S3 Object Lock bucket for checkpoints and retention archives. Unset bucket: local volumes only.
+x-s3-env: &s3-env
+  EVIDENCE_S3_ENDPOINT: ${EVIDENCE_S3_ENDPOINT:-}
+  EVIDENCE_S3_BUCKET: ${EVIDENCE_S3_BUCKET:-}
+  EVIDENCE_S3_REGION: ${EVIDENCE_S3_REGION:-us-east-1}
+  EVIDENCE_S3_ACCESS_KEY_ID: ${EVIDENCE_S3_ACCESS_KEY_ID:-}
+  EVIDENCE_S3_SECRET_ACCESS_KEY: ${EVIDENCE_S3_SECRET_ACCESS_KEY:-}
+  EVIDENCE_S3_PREFIX: ${EVIDENCE_S3_PREFIX:-checkpoints/}
+  EVIDENCE_S3_RETENTION_DAYS: ${EVIDENCE_S3_RETENTION_DAYS:-400}
+  EVIDENCE_S3_LOCK_MODE: ${EVIDENCE_S3_LOCK_MODE:-COMPLIANCE}
+  # Only for an S3-compatible store with a private CA (mount the file into the container).
+  EVIDENCE_S3_CA_FILE: ${EVIDENCE_S3_CA_FILE:-}
+
+x-hardening: &hardening
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+networks:
+  public_net: {}
+  egress_net: {}
+  internal_net:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${HS_INTERNAL_SUBNET:-172.28.0.0/24}
+          # Containers get addresses from the upper half only, so the fixed edge address (HS_NGINX_IP,
+          # .10) can never be handed to another container first. Keep it inside HS_INTERNAL_SUBNET.
+          ip_range: ${HS_INTERNAL_IP_RANGE:-172.28.0.128/25}
+
+volumes:
+  postgres_data: {}
+  # Encrypted backups kept on this server (the newest BACKUP_KEEP_LOCAL); the off-site copy is in S3.
+  backups: {}
+  evidence_checkpoints: {}
+  evidence_archive: {}
+  # Decoy hits the edge captured while the backend could not record them (replayed by ingest-replay).
+  ingest_spool: {}
+
+services:
+  postgres:
+    # docker/Dockerfile.db: official PostgreSQL 16 + Debian security updates, started as the
+    # postgres user (no root entrypoint, no added capabilities).
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.db
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-db:${HS_IMAGE_TAG:-local}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Bootstrap superuser: used only by the init script and healthcheck, never by the app.
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD:?Provide POSTGRES_BOOTSTRAP_PASSWORD}
+      HS_OWNER_DB_USER: ${HS_OWNER_DB_USER:-honeyshield_owner}
+      HS_OWNER_DB_PASSWORD: ${HS_OWNER_DB_PASSWORD:?Provide HS_OWNER_DB_PASSWORD}
+      HS_APP_DB_USER: ${HS_APP_DB_USER:-honeyshield_app}
+      HS_APP_DB_PASSWORD: ${HS_APP_DB_PASSWORD:?Provide HS_APP_DB_PASSWORD}
+    restart: unless-stopped
+    mem_limit: 1g
+    networks:
+      - internal_net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/10-honeyshield-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /var/run/postgresql:uid=999,gid=999,mode=2775
+      - /tmp:uid=999,gid=999,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["sh", "-c", "alembic upgrade head && python -m app.db.privileges grant"]
+    environment:
+      <<: *app-env
+      # Schema owner, used only here (HONEY-002).
+      POSTGRES_MIGRATION_USER: ${HS_OWNER_DB_USER:-honeyshield_owner}
+      POSTGRES_MIGRATION_PASSWORD: ${HS_OWNER_DB_PASSWORD:?Provide HS_OWNER_DB_PASSWORD}
+    restart: "no"
+    networks:
+      - internal_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    <<: *hardening
+
+  backend:
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    environment: *app-env
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    networks:
+      - internal_net
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8000/api/v1/ready', headers={'Host': '${HS_CONTROL_HOST}'}), timeout=5).read()"]
+      interval: 10s
+      timeout: 6s
+      retries: 5
+      start_period: 15s
+    # Replicas share rate limits and the live stream through Redis (HONEY-026); nginx spreads
+    # requests over every replica via Docker DNS. Each replica runs one uvicorn worker.
+    deploy:
+      replicas: ${HS_BACKEND_REPLICAS:-2}
+    <<: *hardening
+
+  redis:
+    # Ephemeral shared state only (rate-limit windows, live-stream pub/sub): no persistence, no
+    # evidence. Losing it degrades limits to per-replica and the stream to same-replica clients.
+    # Valkey (BSD-3-Clause, Linux Foundation), the open-source continuation of Redis: Redis 7.4+ is
+    # licensed RSALv2/SSPLv1, which restricts offering it as part of a service. Same protocol and
+    # commands; the redis-server / redis-cli names below are Valkey's compatibility aliases.
+    image: valkey/valkey:9.0.7-alpine
+    user: "999:999"
+    # Config on stdin so the password is not in the process arguments.
+    command: ["sh", "-c", "printf 'requirepass %s\\nsave \"\"\\nappendonly no\\nmaxmemory 128mb\\nmaxmemory-policy volatile-ttl\\nprotected-mode yes\\nbind 0.0.0.0\\n' \"$$REDIS_PASSWORD\" | exec redis-server -"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Provide REDIS_PASSWORD (openssl rand -hex 32)}
+    restart: unless-stopped
+    mem_limit: 192m
+    networks:
+      - internal_net
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    <<: *hardening
+
+  worker:
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.outbox"]
+    environment: *app-env
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - internal_net
+      - egress_net   # outbound webhooks, SMTP relay, syslog; SSRF guard refuses private/internal targets
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 20s
+    <<: *hardening
+
+  checkpointer:
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    # Exit 3 = checkpoint written but the S3 upload failed: keep looping (the next cycle uploads
+    # every missing file) and let the health check report it. Any other failure stops the loop.
+    command: ["sh", "-c", "while true; do python -m app.workers.evidence checkpoint --out /evidence; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 3 ] || exit $$rc; sleep ${HS_CHECKPOINT_INTERVAL_SECONDS:-900}; done"]
+    healthcheck:
+      # Unhealthy when no checkpoint cycle (including the S3 upload) succeeded in 3 intervals.
+      test: ["CMD", "python", "-c", "import os,sys,time; p=os.environ['HS_CHECKPOINT_STATUS_FILE']; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3*int(os.environ.get('HS_CHECKPOINT_INTERVAL_SECONDS','900')) else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 1
+      start_period: 120s
+    # WORM copy of every checkpoint in an S3 Object Lock bucket (docs/evidence-integrity.md).
+    # Only this service and the retention job get the bucket credentials.
+    environment:
+      <<: [*app-env, *s3-env]
+      HS_CHECKPOINT_STATUS_FILE: /tmp/hs-checkpoint-ok
+      HS_CHECKPOINT_INTERVAL_SECONDS: ${HS_CHECKPOINT_INTERVAL_SECONDS:-900}
+    restart: unless-stopped
+    mem_limit: 128m
+    networks:
+      - internal_net
+      - egress_net   # S3 Object Lock uploads
+    volumes:
+      - evidence_checkpoints:/evidence
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    <<: *hardening
+
+  retention:
+    # Maintenance job, not a daemon: archive then purge evidence older than EVENT_RETENTION_DAYS /
+    # AUDIT_RETENTION_DAYS (0 = keep forever). Runs as the schema owner - the only role the
+    # immutability trigger lets delete, and only inside the job's transactions. Schedule it, e.g.
+    #   docker compose --profile maintenance run --rm retention            (add --dry-run first)
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    profiles: ["maintenance"]
+    command: ["python", "-m", "app.workers.retention"]
+    environment:
+      <<: [*app-env, *s3-env]
+      POSTGRES_MIGRATION_USER: ${HS_OWNER_DB_USER:-honeyshield_owner}
+      POSTGRES_MIGRATION_PASSWORD: ${HS_OWNER_DB_PASSWORD:?Provide HS_OWNER_DB_PASSWORD}
+      EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-0}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-0}
+      RETENTION_ARCHIVE_DIR: /evidence-archive
+    restart: "no"
+    networks:
+      - internal_net
+      - egress_net   # S3 Object Lock uploads
+    volumes:
+      - evidence_archive:/evidence-archive
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: 512m
+    <<: *hardening
+
+  ingest-replay:
+    # Sends decoy hits the edge captured during a backend outage to the backend once it is back
+    # (app/workers/ingest_replay.py). Needs only the internal backend address and the signing key.
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.ingest_replay"]
+    environment:
+      INTEGRATION_SIGNING_KEY: ${INTEGRATION_SIGNING_KEY:?Provide INTEGRATION_SIGNING_KEY (openssl rand -hex 32)}
+      HS_REPLAY_URL: http://backend:8000/internal/v1/ingest-replay
+      HS_INGEST_SPOOL: /var/spool/honeyshield/ingest.jsonl
+      HS_INGEST_SPOOL_STATE: /var/spool/honeyshield/replay-state/position.json
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: 0.25
+    networks:
+      - internal_net
+    volumes:
+      - ingest_spool:/var/spool/honeyshield
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; p='/tmp/ingest-replay.alive'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 120 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    <<: *hardening
+
+  watchdog:
+    # Proves every few minutes that a decoy hit is still detected end to end and tells you on a
+    # separate channel when anything is wrong (app/workers/watchdog.py, docs/watchdog.md).
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.watchdog"]
+    environment:
+      <<: *app-env
+      WATCHDOG_INTERVAL_SECONDS: ${WATCHDOG_INTERVAL_SECONDS:-300}
+      # The self-test goes to the edge's internal address with the public ingest host name (TLS and
+      # Host). Set WATCHDOG_PROBE_CONNECT to empty to go through public DNS instead.
+      WATCHDOG_PROBE_CONNECT: ${WATCHDOG_PROBE_CONNECT-${HS_NGINX_IP:-172.28.0.10}:443}
+      WATCHDOG_PROBE_VERIFY_TLS: ${WATCHDOG_PROBE_VERIFY_TLS:-true}
+      WATCHDOG_NOTIFY_WEBHOOK_URL: ${WATCHDOG_NOTIFY_WEBHOOK_URL:-}
+      WATCHDOG_NOTIFY_EMAIL: ${WATCHDOG_NOTIFY_EMAIL:-}
+      WATCHDOG_HEARTBEAT_URL: ${WATCHDOG_HEARTBEAT_URL:-}
+      WATCHDOG_HEARTBEAT_FAIL_URL: ${WATCHDOG_HEARTBEAT_FAIL_URL:-}
+      WATCHDOG_SPOOL_PATH: /var/spool/honeyshield/ingest.jsonl
+      WATCHDOG_SPOOL_STATE_PATH: /var/spool/honeyshield/replay-state/position.json
+      WATCHDOG_DISK_PATH: /var/spool/honeyshield
+      CHECKPOINT_INTERVAL_SECONDS: ${HS_CHECKPOINT_INTERVAL_SECONDS:-900}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.25
+    networks:
+      - internal_net
+      - egress_net   # notices and the heartbeat
+    volumes:
+      - ingest_spool:/var/spool/honeyshield:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; p='/tmp/watchdog.alive'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3*int(os.environ.get('WATCHDOG_INTERVAL_SECONDS','300'))+120 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 120s
+    <<: *hardening
+
+  backup:
+    # Nightly encrypted backup (app/workers/backup.py, docs/backup-and-restore.md). Off until BACKUP_AGE_RECIPIENTS
+    # is set; off-site once BACKUP_S3_BUCKET is set. Never uploads anything unencrypted.
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.backup"]
+    environment:
+      <<: *app-env
+      BACKUP_AGE_RECIPIENTS: ${BACKUP_AGE_RECIPIENTS:-}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP_LOCAL: ${BACKUP_KEEP_LOCAL:-3}
+      BACKUP_DIR: /backups
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-us-east-1}
+      BACKUP_S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      BACKUP_S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      BACKUP_S3_PREFIX: ${BACKUP_S3_PREFIX:-honeyshield-backups/}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+      # Mount your identity file here only if you want weekly proof that backups decrypt and restore.
+      BACKUP_IDENTITY_FILE: ${BACKUP_IDENTITY_FILE:-}
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - internal_net
+      - egress_net   # S3 uploads
+    volumes:
+      - backups:/backups
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; p='/tmp/backup.alive'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 900 else 1)"]
+      interval: 60s
+      timeout: 10s
+      retries: 2
+      start_period: 120s
+    <<: *hardening
+
+  nginx:
+    # docker/Dockerfile.edge: nginx 1.30 + the two-vhost configuration + console, unused modules removed.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.edge
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-edge:${HS_IMAGE_TAG:-local}
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      HS_CONTROL_HOST: ${HS_CONTROL_HOST}
+      HS_INGEST_HOST: ${HS_INGEST_HOST}
+      HS_CONTROL_CERT: ${HS_CONTROL_CERT:-server.crt}
+      HS_CONTROL_KEY: ${HS_CONTROL_KEY:-server.key}
+      HS_INGEST_CERT: ${HS_INGEST_CERT:-server.crt}
+      HS_INGEST_KEY: ${HS_INGEST_KEY:-server.key}
+      HS_EDGE_INGEST_RPS: ${HS_EDGE_INGEST_RPS:-20}
+      HS_EDGE_HOOK_RPS: ${HS_EDGE_HOOK_RPS:-50}
+      HS_EDGE_API_RPS: ${HS_EDGE_API_RPS:-30}
+      HS_DECOY_LINK_PATH: ${HS_DECOY_LINK_PATH:-t}
+      HS_DECOY_PIXEL_PATH: ${HS_DECOY_PIXEL_PATH:-px}
+      HS_DECOY_COLLECT_PATH: ${HS_DECOY_COLLECT_PATH:-collect}
+      HS_DECOY_LEGACY_PATHS: ${HS_DECOY_LEGACY_PATHS:-true}
+      HS_CONTROL_ALLOW_CIDRS: ${HS_CONTROL_ALLOW_CIDRS:-}
+      HS_BACKEND_ADDR: backend:8000
+      HS_HTTP_PORT: "80"
+      HS_TLS_PORT: "443"
+    networks:
+      public_net: {}
+      internal_net:
+        ipv4_address: ${HS_NGINX_IP:-172.28.0.10}
+    ports:
+      # Production: NGINX_BIND_ADDRESS=0.0.0.0, NGINX_HTTP_PORT=80, NGINX_TLS_PORT=443.
+      - "${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_HTTP_PORT:-8080}:80"
+      - "${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_TLS_PORT:-8443}:443"
+    volumes:
+      - ./proxy/certs:/etc/nginx/certs:ro
+      - ingest_spool:/var/spool/honeyshield
+      # Let's Encrypt HTTP-01 webroot: certbot --webroot -w <this folder> (renewals without downtime).
+      - ${HS_ACME_WEBROOT:-./proxy/acme}:/var/www/acme:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t -q || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /var/log/nginx
+      - /tmp
+      - /etc/nginx/conf.d
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

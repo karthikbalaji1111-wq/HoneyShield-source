@@ -1,0 +1,216 @@
+"""Version 1 threat-intelligence API routes."""
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Path, Query, Response, status
+
+from app.api.dependencies import CurrentUser, get_threat_intelligence_service
+from app.schemas.error import ErrorResponse
+from app.schemas.threat_intelligence import (
+    IPProfileResponse,
+    ThreatSummaryResponse,
+    TimelineResponse,
+)
+from app.services.threat_intelligence import ThreatIntelligenceService
+
+router = APIRouter(prefix="/threats", tags=["threat-intelligence"])
+
+
+@router.get(
+    "/ip/{ip_address}",
+    response_model=IPProfileResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get an IP threat profile",
+    description="Builds an aggregated threat profile from persisted detection events.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Authentication required.",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "No detection events exist for the source IP address.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "Request or domain validation failed.",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Unexpected server error.",
+        },
+    },
+)
+def get_ip_profile(
+    ip_address: Annotated[
+        str,
+        Path(
+            min_length=1,
+            max_length=45,
+            description="Observed source IP address.",
+        ),
+    ],
+    service: Annotated[
+        ThreatIntelligenceService,
+        Depends(get_threat_intelligence_service),
+    ],
+    _: CurrentUser,
+) -> IPProfileResponse:
+    """Retrieve and serialize one IP threat profile. Requires authentication."""
+    return service.get_ip_profile(ip_address=ip_address)
+
+
+@router.get(
+    "/timeline/{ip_address}",
+    response_model=TimelineResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get an IP event timeline",
+    description="Returns the most recent 100 events for an IP in chronological order.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Authentication required.",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": ErrorResponse,
+            "description": "No detection events exist for the source IP address.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "Request or domain validation failed.",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Unexpected server error.",
+        },
+    },
+)
+def get_event_timeline(
+    ip_address: Annotated[
+        str,
+        Path(
+            min_length=1,
+            max_length=45,
+            description="Observed source IP address.",
+        ),
+    ],
+    service: Annotated[
+        ThreatIntelligenceService,
+        Depends(get_threat_intelligence_service),
+    ],
+    _: CurrentUser,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=500,
+            description="Maximum number of timeline events to return.",
+        ),
+    ] = 100,
+    offset: Annotated[
+        int,
+        Query(
+            ge=0,
+            description="Number of timeline events to skip.",
+        ),
+    ] = 0,
+) -> TimelineResponse:
+    """Retrieve and serialize one IP event timeline. Requires authentication."""
+    return service.get_event_timeline(ip_address=ip_address, limit=limit, offset=offset)
+
+
+@router.get(
+    "/summary",
+    response_model=ThreatSummaryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get threat intelligence summary",
+    description="Returns aggregate intelligence derived from detection events.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Authentication required.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "Validation error on query parameters.",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Unexpected server error.",
+        },
+    },
+)
+def get_threat_summary(
+    service: Annotated[
+        ThreatIntelligenceService,
+        Depends(get_threat_intelligence_service),
+    ],
+    _: CurrentUser,
+    days: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=365,
+            description="Time window in days for aggregate intelligence (defaults to 30 days).",
+        ),
+    ] = 30,
+) -> ThreatSummaryResponse:
+    """Retrieve and serialize aggregate threat intelligence. Requires authentication."""
+    from datetime import datetime, timedelta, timezone
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    return service.get_summary(since=since)
+
+
+@router.get(
+    "/top-attackers",
+    response_model=list[IPProfileResponse],
+    status_code=status.HTTP_200_OK,
+    summary="List top attackers",
+    description="Returns the highest-scoring source IP threat profiles.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": "Authentication required.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "model": ErrorResponse,
+            "description": "Validation error on query parameters.",
+        },
+        status.HTTP_500_INTERNAL_SERVER_ERROR: {
+            "model": ErrorResponse,
+            "description": "Unexpected server error.",
+        },
+    },
+)
+def get_top_attackers(
+    service: Annotated[
+        ThreatIntelligenceService,
+        Depends(get_threat_intelligence_service),
+    ],
+    _: CurrentUser,
+    response: Response,
+    days: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=365,
+            description="Time window in days for top attacker scoring (defaults to 30 days).",
+        ),
+    ] = 30,
+    limit: Annotated[
+        int,
+        Query(
+            ge=1,
+            le=500,
+            description="Maximum number of candidate IP aggregations to evaluate.",
+        ),
+    ] = 100,
+) -> list[IPProfileResponse]:
+    """Retrieve and serialize the highest-scoring attackers. Requires authentication."""
+    from datetime import datetime, timedelta, timezone
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    profiles = service.get_top_attackers(since=since, limit=limit)
+    # The ranking covers only the most recent ANALYTICS_SAMPLE_EVENTS events of the window when true.
+    response.headers["X-Analytics-Sampled"] = "true" if service.last_sampled else "false"
+    return profiles

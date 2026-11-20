@@ -1,0 +1,323 @@
+"""User service operations."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import (
+    BusinessRuleViolationError,
+    DuplicateEmailError,
+)
+from app.core.auth_exceptions import UserNotFoundError, ForbiddenError
+from app.core.security import get_password_hash
+from app.models.enums import Role
+from app.models.user import User
+from app.repositories.user_repository import UserRepository
+from app.services.base import BaseService
+from app.schemas.user import UserCreate, UserUpdate
+
+if TYPE_CHECKING:
+    from app.services.audit_log import AuditLogService
+
+
+class UserService(BaseService):
+    """Coordinate user lifecycle and management operations."""
+
+    def __init__(
+        self,
+        session: Session,
+        user_repo: UserRepository,
+        current_user: "User" | None = None,
+        audit_service: "AuditLogService" | None = None,
+    ) -> None:
+        """Initialize the service with user repository and audit service.
+
+        Args:
+            session: The transaction session for user operations.
+            user_repo: Repository used to persist and retrieve users.
+            current_user: The authenticated user making the request.
+            audit_service: Optional service to record security and admin audit events.
+        """
+        super().__init__(session, current_user=current_user, audit_service=audit_service)
+        self.user_repo = user_repo
+
+    def _require_manager(self) -> None:
+        if self.current_user is None or self.current_user.role not in (Role.SYSTEM_ADMIN, Role.TENANT_ADMIN):
+            if self.current_user and hasattr(self, "audit_service") and self.audit_service:
+                try:
+                    self.audit_service.record_action(
+                        event_type="AUTHORIZATION_DENIED",
+                        severity="WARNING",
+                        message="User management requires administrator privileges",
+                        actor_source="api",
+                        actor_user_id=self.current_user.id,
+                        tenant_id=self.current_user.tenant_id,
+                        event_metadata={"actual_role": self.current_user.role.value},
+                    )
+                    self.session.commit()
+                except Exception:
+                    try:
+                        self.session.rollback()
+                    except Exception:
+                        pass
+            raise ForbiddenError("User management requires administrator privileges")
+
+    def list_users(self, limit: int | None = None, offset: int = 0) -> list[User]:
+        """List users based on role scope with deterministic pagination.
+        
+        SYSTEM_ADMIN gets all.
+        TENANT_ADMIN gets users in their own tenant.
+        """
+        self._require_manager()
+        if self.current_user.role == Role.SYSTEM_ADMIN:
+            return self.user_repo.list(limit=limit, offset=offset)
+        
+        return self.user_repo.list_by_tenant(self.current_user.tenant_id, limit=limit, offset=offset)
+
+    def get_user(self, user_id: int, for_update: bool = False) -> User:
+        """Get a user by ID, respecting tenant isolation.
+        
+        Returns 404 for nonexistent OR cross-tenant to prevent enumeration.
+        """
+        self._require_manager()
+        user = self.user_repo.get_by_id(user_id, for_update=for_update)
+        if not user:
+            raise UserNotFoundError("User not found")
+        if self.current_user.role != Role.SYSTEM_ADMIN and user.role == Role.SYSTEM_ADMIN:
+            raise UserNotFoundError("User not found")
+            
+        from app.core.auth_exceptions import ForbiddenError
+        try:
+            self._authorize_tenant_access(user.tenant_id)
+        except ForbiddenError:
+            raise UserNotFoundError("User not found")
+            
+        return user
+
+    def create_user(self, payload: UserCreate) -> User:
+        """Create a new user.
+        
+        SYSTEM_ADMIN can create any user, including other SYSTEM_ADMINs.
+        TENANT_ADMIN is restricted to creating users in their own tenant,
+        and cannot create SYSTEM_ADMINs.
+        """
+        self._require_manager()
+        email = payload.email
+        password = payload.password
+        role = payload.role
+        tenant_id = payload.tenant_id
+
+        if self.current_user.role == Role.TENANT_ADMIN:
+            if role == Role.SYSTEM_ADMIN:
+                raise BusinessRuleViolationError("Cannot create SYSTEM_ADMIN users")
+            if tenant_id is not None and tenant_id != self.current_user.tenant_id:
+                raise BusinessRuleViolationError("Cannot create users for other tenants")
+            # Force bind to the tenant admin's tenant
+            tenant_id = self.current_user.tenant_id
+        
+        if role == Role.SYSTEM_ADMIN:
+            if tenant_id is not None:
+                raise BusinessRuleViolationError("SYSTEM_ADMIN cannot be tenant-bound")
+        elif tenant_id is None:
+            raise BusinessRuleViolationError("tenant_id is required for tenant-scoped users")
+        
+        existing_user = self.user_repo.get_by_email(email)
+        if existing_user:
+            raise DuplicateEmailError(f"Email '{email}' is already registered")
+
+        hashed = get_password_hash(password)
+        
+        try:
+            user = self.user_repo.create(
+                email=email,
+                hashed_password=hashed,
+                role=role,
+                tenant_id=tenant_id,
+            )
+            self.session.flush()
+            if self.audit_service:
+                self.audit_service.record_action(
+                    event_type="USER_CREATED",
+                    severity="INFO",
+                    message=f"Created user '{user.email}' with role '{user.role.value}'",
+                    actor_source="api",
+                    target_entity="user",
+                    target_id=str(user.id),
+                    tenant_id=user.tenant_id,
+                    event_metadata={"email": user.email, "role": user.role.value},
+                )
+            self.session.commit()
+            return user
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def _ensure_not_last_system_admin(self, user: User, new_role: Role, new_active: bool) -> None:
+        """HONEY-023: the platform must always keep one active SYSTEM_ADMIN.
+
+        Locks every active SYSTEM_ADMIN row so two concurrent demotions cannot both pass.
+        """
+        from sqlalchemy import select
+
+        if user.role != Role.SYSTEM_ADMIN or not user.is_active:
+            return
+        if new_role == Role.SYSTEM_ADMIN and new_active:
+            return
+        admins = self.session.scalars(
+            select(User.id).where(User.role == Role.SYSTEM_ADMIN, User.is_active.is_(True)).with_for_update()
+        ).all()
+        if [a for a in admins if a != user.id] == []:
+            raise BusinessRuleViolationError("Cannot remove or deactivate the last active SYSTEM_ADMIN")
+
+    def update_user(self, user_id: int, payload: UserUpdate) -> User:
+        """Update an existing user."""
+        user = self.get_user(user_id, for_update=True)
+        new_role = payload.role if payload.role is not None else user.role
+        tenant_supplied = "tenant_id" in payload.model_fields_set
+        new_tenant = payload.tenant_id if tenant_supplied else user.tenant_id
+        if self.current_user.role == Role.TENANT_ADMIN and tenant_supplied:
+            raise BusinessRuleViolationError("Cannot move users between tenants")
+        if new_role == Role.SYSTEM_ADMIN:
+            if tenant_supplied and new_tenant is not None:
+                raise BusinessRuleViolationError("SYSTEM_ADMIN cannot be tenant-bound")
+            new_tenant = None
+        elif new_tenant is None:
+            raise BusinessRuleViolationError("tenant_id is required for tenant-scoped users")
+        security_change = (
+            payload.password is not None or new_role != user.role or new_tenant != user.tenant_id
+            or (payload.is_active is not None and payload.is_active != user.is_active)
+        )
+        
+        if self.current_user.role == Role.TENANT_ADMIN:
+            if payload.role == Role.SYSTEM_ADMIN:
+                raise BusinessRuleViolationError("Cannot promote user to SYSTEM_ADMIN")
+
+        old_role = user.role.value
+        old_is_active = user.is_active
+        if payload.is_active is False and self.current_user and user.id == self.current_user.id:
+            raise BusinessRuleViolationError("Cannot deactivate your own account")
+        self._ensure_not_last_system_admin(
+            user, new_role, payload.is_active if payload.is_active is not None else user.is_active)
+
+        if payload.email is not None and payload.email.lower() != user.email.lower():
+            existing_user = self.user_repo.get_by_email(payload.email)
+            if existing_user:
+                raise DuplicateEmailError(f"Email '{payload.email}' is already registered")
+            user.email = payload.email
+
+        if payload.password is not None:
+            user.hashed_password = get_password_hash(payload.password)
+
+        user.role = new_role
+        user.tenant_id = new_tenant
+        if security_change:
+            user.token_version = (user.token_version or 0) + 1
+
+        if payload.is_active is not None:
+            user.is_active = payload.is_active
+
+        try:
+            self.session.flush()
+            if self.audit_service:
+                if payload.password is not None:
+                    self.audit_service.record_action(
+                        event_type="PASSWORD_CHANGE",
+                        severity="INFO",
+                        message=f"Password updated for user ID {user.id}",
+                        actor_source="api",
+                        target_entity="user",
+                        target_id=str(user.id),
+                        tenant_id=user.tenant_id,
+                        event_metadata={"user_id": user.id},
+                    )
+                if payload.role is not None and user.role.value != old_role:
+                    self.audit_service.record_action(
+                        event_type="ROLE_CHANGED",
+                        severity="WARNING",
+                        message=f"Role changed from '{old_role}' to '{user.role.value}' for user ID {user.id}",
+                        actor_source="api",
+                        target_entity="user",
+                        target_id=str(user.id),
+                        tenant_id=user.tenant_id,
+                        event_metadata={"old_role": old_role, "new_role": user.role.value},
+                    )
+                if payload.is_active is not None and payload.is_active != old_is_active:
+                    ev_type = "USER_ACTIVATED" if payload.is_active else "USER_DEACTIVATED"
+                    self.audit_service.record_action(
+                        event_type=ev_type,
+                        severity="INFO" if payload.is_active else "WARNING",
+                        message=f"User ID {user.id} status changed to {'active' if payload.is_active else 'inactive'}",
+                        actor_source="api",
+                        target_entity="user",
+                        target_id=str(user.id),
+                        tenant_id=user.tenant_id,
+                        event_metadata={"is_active": payload.is_active},
+                    )
+            self.session.commit()
+            return user
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def deactivate_user(self, user_id: int) -> User:
+        """Deactivate a user account."""
+        user = self.get_user(user_id, for_update=True)
+        if self.current_user and user.id == self.current_user.id:
+            raise BusinessRuleViolationError("Cannot deactivate your own account")
+        self._ensure_not_last_system_admin(user, user.role, False)
+        user.is_active = False
+        user.token_version = (user.token_version or 0) + 1
+        
+        try:
+            self.session.flush()
+            if self.audit_service:
+                self.audit_service.record_action(
+                    event_type="USER_DEACTIVATED",
+                    severity="WARNING",
+                    message=f"Deactivated user ID {user.id}",
+                    actor_source="api",
+                    target_entity="user",
+                    target_id=str(user.id),
+                    tenant_id=user.tenant_id,
+                    event_metadata={"is_active": False},
+                )
+            self.session.commit()
+            return user
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+
+    def reset_mfa(self, user_id: int, reason: str, source: str | None = None) -> User:
+        """Clear a user's MFA enrolment and revoke their sessions (HONEY-029)."""
+        from app.services.mfa import MfaService
+        user = self.get_user(user_id)
+        return MfaService(self.session, self.audit_service).admin_reset(self.current_user, user, reason, source)
+
+    def issue_password_reset(self, user_id: int, reason: str, base_url: str, source: str | None = None):
+        """Issue a single-use reset link for another user in scope. Does not change anything yet."""
+        from app.services import password_reset
+
+        user = self.get_user(user_id)
+        if user.id == self.current_user.id:
+            raise BusinessRuleViolationError("Use change-password for your own account")
+        if not user.is_active:
+            raise BusinessRuleViolationError("Cannot issue a reset link for a disabled account")
+        token, expires = password_reset.issue(user)
+        self.audit_service.record_action(
+            event_type="PASSWORD_RESET_ISSUED", severity="WARNING",
+            message=f"Password reset link issued for user ID {user.id} by user ID {self.current_user.id}",
+            actor_source=source, actor_user_id=self.current_user.id, target_entity="user",
+            target_id=str(user.id), tenant_id=user.tenant_id, event_metadata={"reason": reason})
+        self.session.commit()
+        return password_reset.reset_url(password_reset.console_base(base_url), token), expires

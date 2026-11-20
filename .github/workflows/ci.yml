@@ -1,0 +1,262 @@
+name: HoneyShield CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege for the workflow token; no secrets are used by any job, so pull requests
+# from forks run with nothing to leak.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"   # must match docker/Dockerfile.backend
+
+jobs:
+  test:
+    name: Tests (SQLite unit/API + real PostgreSQL integration)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.16   # same major and patch as docker/Dockerfile.db
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-disposable-password
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: valkey/valkey:9.0.7-alpine   # same as the deployed shared-state store
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      PYTHONPATH: backend
+      APP_ENV: test
+      JWT_SECRET_KEY: ci-test-secret-key-32-chars-long-minimum!
+      # Disposable CI database; the integration harness creates and drops its own DB and roles.
+      HS_TEST_PG_ADMIN_URL: postgresql+psycopg2://postgres:ci-only-disposable-password@127.0.0.1:5432/postgres
+      # Disposable S3 Object Lock store for the WORM checkpoint tests (started below).
+      HS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      HS_TEST_S3_ACCESS_KEY: ci-only-minio
+      HS_TEST_S3_SECRET_KEY: ci-only-disposable-minio-password
+      # Disposable Redis for the multi-replica shared-state tests.
+      HS_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pytest pytest-asyncio httpx pip-audit
+      - name: Dependency audit (known vulnerabilities)
+        run: pip-audit -r backend/requirements.txt --strict
+      - name: Backup tools (pg_dump/pg_restore 16 like the server, and the reference age binary)
+        run: |
+          # The runner's Ubuntu may ship another PostgreSQL major: use the PostgreSQL project's apt
+          # repository (its own setup script, from postgresql-common), as docker/Dockerfile.backend does.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-common age
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client-16
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - name: Migration graph has exactly one head
+        working-directory: backend
+        run: |
+          python - <<'EOF'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          cfg = Config("alembic.ini")
+          heads = ScriptDirectory.from_config(cfg).get_heads()
+          assert len(heads) == 1, heads
+          print("single head:", heads[0])
+          EOF
+      - name: Migrations upgrade -> downgrade -> upgrade on PostgreSQL
+        working-directory: backend
+        env:
+          MIGRATION_DATABASE_URL: postgresql+psycopg2://postgres:ci-only-disposable-password@127.0.0.1:5432/postgres
+        run: |
+          alembic upgrade head
+          alembic downgrade 20261019_01
+          alembic upgrade head
+      - name: ORM models match the migrated schema (no autogenerate drift)
+        working-directory: backend
+        env:
+          MIGRATION_DATABASE_URL: postgresql+psycopg2://postgres:ci-only-disposable-password@127.0.0.1:5432/postgres
+          DATABASE_URL: postgresql+psycopg2://postgres:ci-only-disposable-password@127.0.0.1:5432/postgres
+        run: alembic check
+      - name: Start a disposable S3 Object Lock store (MinIO)
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 \
+            -e MINIO_ROOT_USER="$HS_TEST_S3_ACCESS_KEY" -e MINIO_ROOT_PASSWORD="$HS_TEST_S3_SECRET_KEY" \
+            bitnamilegacy/minio:2025.4.22
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:9000/minio/health/live && exit 0; sleep 1; done
+          docker logs minio; exit 1
+      - name: Test suite (PostgreSQL, S3 Object Lock and Redis tests must run, not skip)
+        working-directory: backend
+        # Explicit bash gives -eo pipefail: without it a failing pytest piped into tee passed the
+        # step, and a "! grep" line that is not the last one never fails it.
+        shell: bash
+        run: |
+          pytest -q --strict-markers -rs | tee pytest.out
+          if grep -qE "SKIPPED.*(HS_TEST_PG_ADMIN_URL|HS_TEST_S3_ENDPOINT|HS_TEST_REDIS_URL|age binary|is not installed)" pytest.out; then
+            echo "::error::Integration tests were skipped: a disposable service or a backup tool is missing"
+            exit 1
+          fi
+      - name: Reference integration client and verification script compile
+        run: python -m py_compile integrations/python/honeyshield_hook.py scripts/verify_deployment.py
+
+  deploy-config:
+    name: Container build + deployment configuration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - name: Build backend image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: docker/Dockerfile.backend
+          push: false
+          load: true
+          tags: honeyshield-backend:ci
+      - name: Image runs as non-root
+        run: test "$(docker run --rm --entrypoint id honeyshield-backend:ci -u)" = "10001"
+      - name: Image has the PostgreSQL 16 client (backups must restore into the 16 server)
+        run: docker run --rm --entrypoint pg_dump honeyshield-backend:ci --version | grep -E ' 16\.[0-9]+'
+      - name: Compose file validates with a complete env
+        run: |
+          cat > ci.env <<'EOF'
+          POSTGRES_DB=honeyshield
+          POSTGRES_BOOTSTRAP_PASSWORD=x
+          HS_OWNER_DB_PASSWORD=x
+          HS_APP_DB_PASSWORD=x
+          JWT_SECRET_KEY=ci-only-0123456789abcdef0123456789abcdef
+          INTEGRATION_SIGNING_KEY=ci-only-fedcba9876543210fedcba9876543210
+          MFA_SECRET_KEY=ci-only-a1b2c3d4e5f60718293a4b5c6d7e8f90
+          REDIS_PASSWORD=ci-only-redis-password
+          HS_CONTROL_HOST=app.ci.test
+          HS_INGEST_HOST=ingest.ci.test
+          EOF
+          docker compose --env-file ci.env config -q
+          docker compose --env-file ci.env -f docker-compose.yml -f docker-compose.sso.yml config -q
+          docker compose --env-file ci.env --profile maintenance config -q
+      - name: Helm chart lints, renders and validates against the Kubernetes schema
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 lint /chart
+          docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 template hs /chart \
+            --set metrics.prometheusNamespace=monitoring > rendered.yaml
+          docker run --rm -v "$PWD:/w:ro" ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary \
+            -kubernetes-version 1.31.0 /w/rendered.yaml
+          # every workload (Deployment, Job, CronJob) can pull from a private registry
+          docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 template hs /chart \
+            --set 'imagePullSecrets[0].name=ci-pull-secret' > pull.yaml
+          test "$(grep -cE '^kind: (Deployment|Job|CronJob)$' pull.yaml)" = "$(grep -c 'name: ci-pull-secret' pull.yaml)"
+          ! docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 template hs /chart \
+            --set retention.eventDays=90 >/dev/null 2>&1   # retention without S3 must be refused
+          # backups, custom decoy paths and an operator allowlist render and validate
+          docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 template hs /chart \
+            --set backup.enabled=true --set backup.ageRecipients=age1example --set backup.endpoint=https://s3.example \
+            --set backup.bucket=b --set decoyPaths.link=static/v2 --set controlAllowCidrs=203.0.113.0/24 > ops.yaml
+          docker run --rm -v "$PWD:/w:ro" ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary -kubernetes-version 1.31.0 /w/ops.yaml
+          grep -q 'kind: CronJob' ops.yaml && grep -q 'name: hs-watchdog' ops.yaml
+          ! docker run --rm -v "$PWD/deploy/helm/honeyshield:/chart:ro" alpine/helm:3.16.4 template hs /chart \
+            --set backup.enabled=true >/dev/null 2>&1   # backups without bucket and key must be refused
+      - name: Prometheus alert rules pass promtool check and unit tests
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring:/r:ro" -w /r prom/prometheus:v3.1.0 check rules prometheus-rules.yml
+          docker run --rm --entrypoint promtool -v "$PWD/deploy/monitoring:/r:ro" -w /r prom/prometheus:v3.1.0 test rules prometheus-rules.test.yml
+      - name: Local quick start writes a complete configuration (and never overwrites one)
+        run: |
+          scripts/quickstart_env.sh "$RUNNER_TEMP/quick.env"
+          docker compose --env-file "$RUNNER_TEMP/quick.env" config -q
+          ! scripts/quickstart_env.sh "$RUNNER_TEMP/quick.env" 2>/dev/null
+      - name: Installer passes shellcheck and prepares an installation from this checkout
+        run: |
+          docker run --rm -v "$PWD/deploy/install:/s:ro" koalaman/shellcheck:v0.10.0 /s/install.sh
+          bash deploy/install/install.sh --source "$PWD" --dir "$RUNNER_TEMP/hs-install" --no-start --version 1.3.0 \
+            --decoy-paths static/v2,assets/img,api-telemetry --admin-cidrs 203.0.113.0/24
+          grep -q '^HS_DECOY_LINK_PATH=static/v2$' "$RUNNER_TEMP/hs-install/.env"
+          grep -q '^HS_INTERNAL_IP_RANGE=172.28.0.128/25$' "$RUNNER_TEMP/hs-install/.env"
+          docker compose --project-directory "$RUNNER_TEMP/hs-install" --env-file "$RUNNER_TEMP/hs-install/.env" config -q
+          test "$(stat -c %a "$RUNNER_TEMP/hs-install/.env")" = "600"
+      - name: Public source copy has every file the installer needs, and nothing personal
+        run: |
+          docker run --rm -v "$PWD/scripts:/s:ro" koalaman/shellcheck:v0.10.0 /s/publish_source_repo.sh
+          git init -q "$RUNNER_TEMP/hss"
+          scripts/publish_source_repo.sh "$RUNNER_TEMP/hss"
+          for f in $(sed -n 's/^FILES="\(.*\)"$/\1/p' deploy/install/install.sh); do
+            test -f "$RUNNER_TEMP/hss/$f" || { echo "::error::the installer downloads $f but deploy/public/EXCLUDE leaves it out"; exit 1; }
+          done
+      - name: Compose refuses to start without required secrets
+        run: |
+          printf 'POSTGRES_DB=honeyshield\n' > empty.env
+          ! docker compose --env-file empty.env config -q 2>/dev/null
+      - name: Nginx configuration renders and passes nginx -t
+        run: |
+          mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes -keyout certs/server.key \
+            -out certs/server.crt -days 1 -subj "/CN=ci" 2>/dev/null && chmod 644 certs/*
+          docker run --rm -e HS_CONTROL_HOST=app.ci.test -e HS_INGEST_HOST=ingest.ci.test \
+            -e HS_CONTROL_CERT=server.crt -e HS_CONTROL_KEY=server.key -e HS_INGEST_CERT=server.crt \
+            -e HS_INGEST_KEY=server.key -e HS_EDGE_INGEST_RPS=20 -e HS_EDGE_HOOK_RPS=50 -e HS_EDGE_API_RPS=30 \
+            -e HS_BACKEND_ADDR=backend:8000 -e HS_HTTP_PORT=80 -e HS_TLS_PORT=443 --add-host backend:127.0.0.1 \
+            -v "$PWD/proxy/templates:/etc/nginx/templates:ro" \
+            -v "$PWD/proxy/hs_proxy_headers.conf:/etc/nginx/hs_proxy_headers.conf:ro" \
+            -v "$PWD/proxy/14-hs-edge-config.envsh:/docker-entrypoint.d/14-hs-edge-config.envsh:ro" \
+            -v "$PWD/proxy/15-hs-resolver.sh:/docker-entrypoint.d/15-hs-resolver.sh:ro" \
+            -v "$PWD/certs:/etc/nginx/certs:ro" --tmpfs /var/spool/honeyshield nginx:1.30.7-alpine \
+            sh -c '. /docker-entrypoint.d/14-hs-edge-config.envsh && /docker-entrypoint.d/15-hs-resolver.sh && /docker-entrypoint.d/20-envsubst-on-templates.sh && nginx -t'
+      - name: Edge image (nginx + console) builds and its configuration passes nginx -t
+        run: |
+          docker build -f docker/Dockerfile.edge -t honeyshield-edge:ci .
+          edge_test() {
+            docker run --rm -e HS_CONTROL_HOST=app.ci.test -e HS_INGEST_HOST=ingest.ci.test "$@" \
+              --add-host backend:127.0.0.1 -v "$PWD/certs:/etc/nginx/certs:ro" honeyshield-edge:ci \
+              sh -c '. /docker-entrypoint.d/14-hs-edge-config.envsh && /docker-entrypoint.d/15-hs-resolver.sh && /docker-entrypoint.d/20-envsubst-on-templates.sh && nginx -t && { grep -c "deny all" /etc/nginx/conf.d/hs-control-access.inc || true; }'
+          }
+          edge_test
+          # own decoy paths and an operator allowlist
+          edge_test -e HS_DECOY_LINK_PATH=static/v2 -e HS_DECOY_PIXEL_PATH=assets/img -e HS_DECOY_COLLECT_PATH=api-t \
+            -e HS_CONTROL_ALLOW_CIDRS=203.0.113.0/24,2001:db8::/32 | grep -q '^1$'
+          # an unsafe value stops the container instead of producing a broken or open edge
+          ! edge_test -e HS_DECOY_LINK_PATH='x|y' 2>/dev/null
+          ! edge_test -e HS_CONTROL_ALLOW_CIDRS='10.0.0.0/8;allow all' 2>/dev/null
+      - name: Database image builds and runs as the postgres user
+        run: |
+          docker build -f docker/Dockerfile.db -t honeyshield-db:ci .
+          test "$(docker run --rm --entrypoint id honeyshield-db:ci -u)" = "999"
+          ! docker run --rm --entrypoint sh honeyshield-db:ci -c 'command -v gosu'
+      - name: Image vulnerability gate and SBOM (Trivy)
+        # Every image a deployment runs, ours and third-party: fails on HIGH/CRITICAL findings that
+        # have a fix available (rebuild, bump the pin or the base digest). Unfixed distro CVEs are
+        # reported, not gated. The store image is read from docker-compose.yml so the two cannot drift.
+        run: |
+          mkdir -p sbom
+          store="$(sed -n 's/^    image: \(valkey\/valkey:[^ ]*\)$/\1/p' docker-compose.yml)"
+          test -n "$store"
+          docker pull -q "$store"
+          for img in honeyshield-backend:ci honeyshield-edge:ci honeyshield-db:ci "$store"; do
+            name="${img%%:*}"; name="${name##*/}"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/sbom:/out" aquasec/trivy:0.58.1 \
+              image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$img"
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD/sbom:/out" aquasec/trivy:0.58.1 \
+              image --quiet --format cyclonedx --output "/out/$name.cdx.json" "$img"
+          done
+          ls -l sbom
+      - name: Keep the SBOMs with the run
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom/*.cdx.json
+          retention-days: 90

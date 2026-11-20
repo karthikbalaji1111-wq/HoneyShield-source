@@ -1,0 +1,109 @@
+{{- if .Values.watchdog.enabled }}
+# Watchdog (docs/watchdog.md): self-test hit through the edge Service with the public ingest host
+# name, health checks, notices and the dead-man's-switch heartbeat.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-watchdog
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "watchdog") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "watchdog") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: watchdog
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["python", "-m", "app.workers.watchdog"]
+          env:
+            {{- include "hs.appEnv" . | nindent 12 }}
+            - { name: WATCHDOG_INTERVAL_SECONDS, value: {{ .Values.watchdog.intervalSeconds | quote }} }
+            - { name: WATCHDOG_PROBE_CONNECT, value: "{{ include "hs.name" . }}-edge.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.edge.service.httpsPort }}" }
+            - { name: WATCHDOG_PROBE_VERIFY_TLS, value: {{ .Values.watchdog.probeVerifyTls | quote }} }
+            - { name: WATCHDOG_NOTIFY_EMAIL, value: {{ .Values.watchdog.notifyEmail | quote }} }
+            - { name: CHECKPOINT_INTERVAL_SECONDS, value: {{ .Values.checkpointer.intervalSeconds | quote }} }
+            - name: WATCHDOG_NOTIFY_WEBHOOK_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: WATCHDOG_NOTIFY_WEBHOOK_URL, optional: true } }
+            - name: WATCHDOG_HEARTBEAT_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: WATCHDOG_HEARTBEAT_URL, optional: true } }
+            - name: WATCHDOG_HEARTBEAT_FAIL_URL
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: WATCHDOG_HEARTBEAT_FAIL_URL, optional: true } }
+            {{- if not .Values.backup.enabled }}
+            # No backup job in this release: the backups check reports "not set up" (warning only).
+            {{- end }}
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.watchdog.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import os,sys,time; p='/tmp/watchdog.alive'; sys.exit(0 if os.path.exists(p) and time.time()-os.path.getmtime(p) < 3*int(os.environ['WATCHDOG_INTERVAL_SECONDS'])+120 else 1)"]
+            initialDelaySeconds: 180
+            periodSeconds: 60
+            timeoutSeconds: 10
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+{{- end }}
+{{- if .Values.backup.enabled }}
+{{- if or (not .Values.backup.bucket) (not .Values.backup.ageRecipients) (not .Values.backup.endpoint) }}
+{{- fail "backup.enabled needs backup.ageRecipients, backup.endpoint and backup.bucket (and BACKUP_S3_SECRET_ACCESS_KEY in the Secret)" }}
+{{- end }}
+---
+# Encrypted off-site backup (docs/backup-and-restore.md). Runs as the runtime role; writes ciphertext only.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "hs.name" . }}-backup
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: {{- include "hs.selector" (dict "root" . "component" "backup") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              image: {{ include "hs.backendImage" . }}
+              command: ["python", "-m", "app.workers.backup", "run"]
+              env:
+                {{- include "hs.appEnv" . | nindent 16 }}
+                - { name: BACKUP_AGE_RECIPIENTS, value: {{ .Values.backup.ageRecipients | quote }} }
+                - { name: BACKUP_DIR, value: /work }
+                - { name: BACKUP_KEEP_LOCAL, value: "1" }
+                - { name: BACKUP_S3_ENDPOINT, value: {{ .Values.backup.endpoint | quote }} }
+                - { name: BACKUP_S3_BUCKET, value: {{ .Values.backup.bucket | quote }} }
+                - { name: BACKUP_S3_REGION, value: {{ .Values.backup.region | quote }} }
+                - { name: BACKUP_S3_ACCESS_KEY_ID, value: {{ .Values.backup.accessKeyId | quote }} }
+                - { name: BACKUP_S3_PREFIX, value: {{ .Values.backup.prefix | quote }} }
+                - { name: BACKUP_KEEP_DAYS, value: {{ .Values.backup.keepDays | quote }} }
+                - name: BACKUP_S3_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: BACKUP_S3_SECRET_ACCESS_KEY } }
+              securityContext: {{- include "hs.containerSecurity" . | nindent 16 }}
+              resources: {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - { name: work, mountPath: /work }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - { name: work, emptyDir: {} }
+            - { name: tmp, emptyDir: {} }
+{{- end }}

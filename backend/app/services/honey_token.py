@@ -1,0 +1,456 @@
+"""Honey-token service operations."""
+from __future__ import annotations
+
+
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import (
+    DuplicateHoneyTokenError,
+    HoneyTokenNotFoundError,
+    ProjectNotFoundError,
+    ValidationError,
+)
+from app.models.enums import HoneyTokenType
+from app.models.honey_token import HoneyToken
+from app.repositories.honey_token import HoneyTokenRepository
+from app.repositories.project import ProjectRepository
+from app.services.audit_log import AuditLogService
+from app.services.base import BaseService
+from app.services.generation.registry import GENERATOR_REGISTRY
+
+from sqlalchemy.exc import IntegrityError
+
+
+
+def _decoy_paths() -> dict[str, str]:
+    from app.core.config import get_settings
+    settings = get_settings()
+    return {"link": settings.decoy_link_path, "pixel": settings.decoy_pixel_path,
+            "collect": settings.decoy_collect_path}
+
+class HoneyTokenService(BaseService):
+    """Coordinate honey-token lifecycle operations."""
+
+    def __init__(
+        self,
+        session: Session,
+        token_repo: HoneyTokenRepository,
+        project_repo: ProjectRepository,
+        audit_service: AuditLogService | None = None,
+        current_user: "User" | None = None,
+    ) -> None:
+        """Initialize the service with token and project repositories.
+
+        Args:
+            session: The transaction session for token operations.
+            token_repo: Repository used to persist and retrieve honey tokens.
+            project_repo: Repository used to resolve owning projects.
+            audit_service: Service used to record audit events.
+        """
+        super().__init__(session, current_user=current_user)
+        self.token_repo = token_repo
+        self.project_repo = project_repo
+        self.audit_service = audit_service
+
+    def create_token(
+        self,
+        project_domain: str,
+        token_type: HoneyTokenType,
+        token_value: str | None = None,
+        label: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> HoneyToken:
+        """Create a unique honey token for an existing project.
+
+        HONEY-012: token values are globally unique (public ingestion resolves them without a
+        tenant), so letting a tenant choose one would turn the uniqueness check into an oracle
+        ("does this value belong to someone's decoy?"). Only SYSTEM_ADMIN may supply a value;
+        everyone else gets a generated token and artifact (same as /generate).
+
+        Args:
+            project_domain: Domain of the owning project.
+            token_type: Category of the honey token.
+            token_value: Globally unique value that identifies the token.
+            label: Optional human-readable token label.
+            metadata: Optional structured token metadata.
+
+        Returns:
+            The persisted honey token.
+
+        Raises:
+            ValidationError: If a required value is blank.
+            ProjectNotFoundError: If the owning project does not exist.
+            DuplicateHoneyTokenError: If the token value is already in use.
+        """
+        self._validate_required_fields(("Project domain", project_domain))
+        if token_value is None:
+            token = self.generate_token(project_domain, token_type)
+            if label:
+                token.label = label
+                self.session.commit()
+            return token
+        self._validate_required_fields(("Token value", token_value))
+
+        try:
+            tenant_id = None
+            if self.current_user and self.current_user.role.name != "SYSTEM_ADMIN":
+                tenant_id = self.current_user.tenant_id
+            project = self.project_repo.get_by_domain(project_domain, tenant_id=tenant_id)
+            if not project:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+            from app.core.auth_exceptions import ForbiddenError
+            try:
+                self._authorize_tenant_access(project.tenant_id)
+            except ForbiddenError:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+            self._reject_custom_value()
+
+            existing_token = self.token_repo.get_by_token(token_value)
+            if existing_token:
+                raise DuplicateHoneyTokenError(
+                    f"Token with value '{token_value}' already exists"
+                )
+
+            token = self.token_repo.create(
+                project_id=project.id,
+                token_type=token_type,
+                token_value=token_value,
+                label=label,
+                token_metadata=metadata,
+            )
+            self.session.flush()
+
+            if self.audit_service:
+                self.audit_service.record_action(
+                    event_type="HONEY_TOKEN_CREATED",
+                    severity="INFO",
+                    message=f"Created honey token '{token_type.value}' in project '{project_domain}'",
+                    actor_source="api",
+                    target_entity="honey_token",
+                    target_id=token.id,
+                    tenant_id=project.tenant_id,
+                    project_id=project.id,
+                )
+
+            self.session.commit()
+            return token
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def generate_token(
+        self,
+        project_domain: str,
+        token_type: HoneyTokenType,
+        params: dict[str, Any] | None = None,
+    ) -> HoneyToken:
+        """Generate and persist a realistic honey token dynamically.
+
+        Args:
+            project_domain: Domain of the owning project.
+            token_type: Category of the honey token.
+            params: Optional generation-specific parameters.
+
+        Returns:
+            The persisted honey token.
+
+        Raises:
+            ValidationError: If project_domain is empty, token_type is invalid, or output is invalid.
+            ProjectNotFoundError: If the project doesn't exist.
+            DuplicateHoneyTokenError: If unique generation fails after 3 attempts.
+        """
+        self._validate_required_fields(("Project domain", project_domain))
+        
+        generator = GENERATOR_REGISTRY.get(token_type)
+        if not generator:
+            raise ValidationError(f"Unsupported honey token type: '{token_type}'")
+
+        try:
+            tenant_id = None
+            if self.current_user and self.current_user.role.name != "SYSTEM_ADMIN":
+                tenant_id = self.current_user.tenant_id
+            project = self.project_repo.get_by_domain(project_domain, tenant_id=tenant_id)
+            if not project:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+            from app.core.auth_exceptions import ForbiddenError
+            try:
+                self._authorize_tenant_access(project.tenant_id)
+            except ForbiddenError:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+
+            project_id = project.id
+            tenant_id = project.tenant_id
+
+            from app.core.config import get_settings
+            ingest_base_url = get_settings().public_ingest_base_url
+
+            # Try up to 3 times to generate a globally unique token
+            for _ in range(3):
+                generated = generator.generate(
+                    project_domain, params or {}, ingest_base_url=ingest_base_url,
+                    paths=_decoy_paths(),
+                )
+                
+                # Output validation
+                if not generated.token_value:
+                    raise ValidationError("Generator produced an empty token value")
+
+                # Check if generated value already exists before attempting insert
+                if self.token_repo.get_by_token(generated.token_value):
+                    continue
+
+                try:
+                    token = self.token_repo.create(
+                        project_id=project_id,
+                        token_type=token_type,
+                        token_value=generated.token_value,
+                        label=generated.label,
+                        token_metadata=generated.metadata,
+                    )
+                    self.session.flush()
+
+                    if self.audit_service:
+                        self.audit_service.record_action(
+                            event_type="HONEY_TOKEN_GENERATED",
+                            severity="INFO",
+                            message=f"Generated honey token '{token_type.value}' for project '{project_domain}'",
+                            actor_source="api",
+                            target_entity="honey_token",
+                            target_id=token.id,
+                            tenant_id=tenant_id,
+                            project_id=project_id,
+                        )
+
+                    self.session.commit()
+                    return token
+                except IntegrityError:
+                    try:
+                        self.session.rollback()
+                    except Exception:
+                        pass
+                    continue
+                except Exception:
+                    try:
+                        self.session.rollback()
+                    except Exception:
+                        pass
+                    raise
+                    
+            raise DuplicateHoneyTokenError(
+                f"Failed to generate unique token for '{project_domain}' after 3 attempts"
+            )
+            
+        except (ProjectNotFoundError, ValidationError, DuplicateHoneyTokenError):
+            raise
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def revoke_token(self, token_value: str) -> None:
+        """Mark an existing honey token as inactive.
+
+        Args:
+            token_value: Globally unique value of the token to revoke.
+
+        Returns:
+            None.
+
+        Raises:
+            ValidationError: If the token value is blank.
+            HoneyTokenNotFoundError: If no matching token exists.
+        """
+        self._validate_required_fields(("Token value", token_value))
+
+        try:
+            token = self.token_repo.get_by_token(token_value)
+            if not token:
+                raise HoneyTokenNotFoundError(f"Token '{token_value}' not found")
+            from app.core.auth_exceptions import ForbiddenError
+            try:
+                self._authorize_tenant_access(token.project.tenant_id)
+            except ForbiddenError:
+                raise HoneyTokenNotFoundError(f"Token '{token_value}' not found")
+
+            token.is_active = False
+            self.session.flush()
+
+            if self.audit_service:
+                self.audit_service.record_action(
+                    event_type="HONEY_TOKEN_REVOKED",
+                    severity="WARNING",
+                    message=f"Revoked honey token ID {token.id}",
+                    actor_source="api",
+                    target_entity="honey_token",
+                    target_id=token.id,
+                    tenant_id=token.project.tenant_id,
+                    project_id=token.project_id,
+                )
+
+            self.session.commit()
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def _reject_custom_value(self) -> None:
+        from app.models.enums import Role
+        if not self.current_user or self.current_user.role != Role.SYSTEM_ADMIN:
+            raise ValidationError(
+                "Custom token values are not accepted; HoneyShield generates every value. "
+                "Omit the value (or use the generate endpoint)."
+            )
+
+    def _regenerate_for(self, old_token: HoneyToken) -> tuple[str, dict[str, Any] | None]:
+        """A fresh value and artifact of the same type and style as ``old_token``."""
+        from app.core.config import get_settings
+
+        generator = GENERATOR_REGISTRY.get(old_token.token_type)
+        old_meta = old_token.token_metadata or {}
+        params = {k: old_meta[k] for k in ("provider_style", "field_name") if k in old_meta}
+        for _ in range(3):
+            generated = generator.generate(old_token.project.domain, params,
+                                           ingest_base_url=get_settings().public_ingest_base_url,
+                                           paths=_decoy_paths())
+            if not self.token_repo.get_by_token(generated.token_value):
+                return generated.token_value, generated.metadata
+        raise DuplicateHoneyTokenError("Failed to generate a unique replacement token")
+
+    def rotate_token(self, old_token_value: str, new_token_value: str | None = None) -> HoneyToken:
+        """Revoke an existing token and replace it atomically.
+
+        Args:
+            old_token_value: Existing token value to revoke.
+            new_token_value: Unique value for the replacement token.
+
+        Returns:
+            The persisted replacement honey token.
+
+        Raises:
+            ValidationError: If either token value is blank.
+            HoneyTokenNotFoundError: If the old token does not exist.
+            DuplicateHoneyTokenError: If the new token value is already in use.
+        """
+        self._validate_required_fields(("Old token value", old_token_value))
+
+        try:
+            old_token = self.token_repo.get_by_token(old_token_value)
+            if not old_token:
+                raise HoneyTokenNotFoundError(
+                    f"Token '{old_token_value}' not found"
+                )
+            from app.core.auth_exceptions import ForbiddenError
+            try:
+                self._authorize_tenant_access(old_token.project.tenant_id)
+            except ForbiddenError:
+                raise HoneyTokenNotFoundError(
+                    f"Token '{old_token_value}' not found"
+                )
+
+            if new_token_value is None:
+                # The artifact is regenerated: copying the old metadata would leave URLs that
+                # still point at the revoked value.
+                new_token_value, new_metadata = self._regenerate_for(old_token)
+            else:
+                self._reject_custom_value()
+                self._validate_required_fields(("New token value", new_token_value))
+                new_metadata = old_token.token_metadata
+                existing_new_token = self.token_repo.get_by_token(new_token_value)
+                if existing_new_token:
+                    raise DuplicateHoneyTokenError(
+                        f"Token with value '{new_token_value}' already exists"
+                    )
+
+            old_token.is_active = False
+            new_token = self.token_repo.create(
+                project_id=old_token.project_id,
+                token_type=old_token.token_type,
+                token_value=new_token_value,
+                label=old_token.label,
+                token_metadata=new_metadata,
+            )
+            self.session.flush()
+
+            if self.audit_service:
+                self.audit_service.record_action(
+                    event_type="HONEY_TOKEN_ROTATED",
+                    severity="INFO",
+                    message=f"Rotated honey token ID {old_token.id} to new token ID {new_token.id}",
+                    actor_source="api",
+                    target_entity="honey_token",
+                    target_id=new_token.id,
+                    tenant_id=old_token.project.tenant_id,
+                    project_id=old_token.project_id,
+                )
+
+            self.session.commit()
+            return new_token
+        except Exception:
+            try:
+                self.session.rollback()
+            except Exception:
+                pass
+            raise
+
+    def list_tokens(
+        self,
+        project_domain: str | None = None,
+        active_only: bool = True,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[HoneyToken]:
+        """List honey tokens with optional project, activity, and pagination filters.
+
+        Args:
+            project_domain: Optional domain limiting results to one project.
+            active_only: Whether to exclude revoked tokens.
+            limit: Optional maximum number of records to return.
+            offset: Number of records to skip.
+
+        Returns:
+            Honey tokens matching the requested filters.
+
+        Raises:
+            ValidationError: If a supplied project domain is blank.
+            ProjectNotFoundError: If a supplied project does not exist.
+        """
+        project_id = None
+        if project_domain is not None:
+            self._validate_required_fields(("Project domain", project_domain))
+            tenant_id = None
+            if self.current_user and self.current_user.role.name != "SYSTEM_ADMIN":
+                tenant_id = self.current_user.tenant_id
+            project = self.project_repo.get_by_domain(project_domain, tenant_id=tenant_id)
+            if not project:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+            from app.core.auth_exceptions import ForbiddenError
+            try:
+                self._authorize_tenant_access(project.tenant_id)
+            except ForbiddenError:
+                raise ProjectNotFoundError(f"Project '{project_domain}' not found")
+            project_id = project.id
+
+        if self.current_user and self.current_user.role.name != "SYSTEM_ADMIN":
+            return self.token_repo.list_for_tenant(
+                tenant_id=self.current_user.tenant_id,
+                active_only=active_only,
+                project_id=project_id,
+                limit=limit,
+                offset=offset,
+            )
+
+        return self.token_repo.list_global(
+            active_only=active_only,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+        )
