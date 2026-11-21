@@ -23,6 +23,8 @@ import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from app.core import tls
+
 ALLOWED_HTTPS_PORTS = {443, 8443}
 ALLOWED_HTTP_PORTS = {80, 8080}
 _BLOCKED_V4 = [ipaddress.ip_network(n) for n in ("100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "0.0.0.0/8")]
@@ -149,7 +151,7 @@ def http_sender(target: ValidatedTarget, headers: dict[str, str], body: bytes, t
     """POST to the first validated address. Returns the status code; raises OSError on failure."""
     address = target.addresses[0]
     if target.scheme == "https":
-        conn = _PinnedHTTPSConnection(target.host, address, target.port, timeout, ssl.create_default_context())
+        conn = _PinnedHTTPSConnection(target.host, address, target.port, timeout, tls.client_context())
     else:
         conn = _PinnedHTTPConnection(target.host, address, target.port, timeout)
     try:

@@ -10,7 +10,7 @@
 #     bash -c "$(curl -fsSL .../install.sh)" -- --control-host app.example.com --ingest-host ingest.example.com --email you@example.com
 #
 #   Upgrade an existing installation to another version (keeps data and settings):
-#     ~/honeyshield/install.sh --upgrade --version 1.3.1
+#     ~/honeyshield/install.sh --upgrade --version 1.3.2
 #
 # Options:
 #   --dir DIR             where to install (default: ~/honeyshield)
@@ -39,7 +39,7 @@
 # Works with the bash 3.2 that macOS ships. Never prints a secret.
 set -euo pipefail
 
-HS_VERSION_DEFAULT="1.3.1"
+HS_VERSION_DEFAULT="1.3.2"
 DIR="${HOME}/honeyshield"
 VERSION="$HS_VERSION_DEFAULT"
 CONTROL_HOST=""

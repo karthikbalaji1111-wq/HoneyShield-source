@@ -3,6 +3,33 @@
 Versions follow [Semantic Versioning](https://semver.org). The Helm chart's `appVersion` and the
 release tag (`vX.Y.Z`) always match; the release workflow refuses a tag that does not.
 
+## 1.3.2 — 2026-11-21
+
+From the first public CodeQL scan of `HoneyShield-source` (16 alerts: 5 changed here, 11 reviewed
+and dismissed as false positives, with the reason recorded on each alert).
+
+### Upgrade notes
+* `~/honeyshield/install.sh --upgrade --version 1.3.2`. No database or configuration changes.
+* If something outside HoneyShield reads files in the evidence checkpoint volume as a different user
+  (not the group of the checkpointer), give it that group or read them as root: new checkpoints are
+  `0440`. Files written before the upgrade keep their old mode.
+* A webhook, syslog, SMTP, S3 or OIDC server that only speaks TLS 1.0 or 1.1 is now refused. Such
+  servers were already refused by the default OpenSSL configuration of the images.
+
+### Security
+* Every connection HoneyShield makes to another server (webhooks, syslog/SIEM over TLS, SMTP, S3 and
+  WORM storage, OIDC sign-in, the watchdog's probe) now requires TLS 1.2 or newer explicitly, through
+  one shared helper (`app.core.tls`). Python's default already refused older versions on current
+  OpenSSL builds, but that depended on the system's OpenSSL configuration. A test fails if code
+  creates its own TLS context again. `scripts/verify_deployment.py` sets the same floor.
+* Evidence checkpoint files and evidence exports are created `0440` instead of `0444`: still
+  read-only, but no longer readable by other users of the host. Exports contain attacker IP addresses
+  and request details.
+
+### Changed
+* An invalid `TRUSTED_PROXIES` entry is logged by its position ("entry 2 is not an IP address or CIDR
+  network") instead of echoing the configured value.
+
 ## 1.3.1 — 2026-11-20
 
 ### Upgrade notes

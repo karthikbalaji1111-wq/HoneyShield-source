@@ -17,7 +17,7 @@ Every release image is built by this repository's own release workflow
 build. Check it with the GitHub CLI:
 
 ```bash
-gh attestation verify oci://ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.1 \
+gh attestation verify oci://ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.2 \
   --repo karthikbalaji1111-wq/HoneyShield-source
 ```
 
@@ -26,7 +26,7 @@ The output names the workflow run and the exact commit that produced the image; 
 the build parameters:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.1 \
+docker buildx imagetools inspect ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.2 \
   --format '{{json .SBOM}}' | head -c 600
 ```
 

@@ -26,6 +26,7 @@ from email.message import EmailMessage
 from email.utils import format_datetime, make_msgid
 from typing import Any
 
+from app.core import tls
 from app.services.alerting import webhook as _webhook
 from app.services.alerting.webhook import Resolver, UnsafeWebhookURL, ValidatedTarget, is_public_address
 
@@ -166,7 +167,7 @@ def syslog_sender(target: ValidatedTarget, frame: bytes, timeout: float,
     sock = socket.create_connection((target.addresses[0], target.port), timeout)
     try:
         if target.scheme == "tls":
-            sock = (context or ssl.create_default_context()).wrap_socket(sock, server_hostname=target.host)
+            sock = (context or tls.client_context()).wrap_socket(sock, server_hostname=target.host)
         sock.sendall(frame)
         # Close gracefully. Closing right after the write while the server's TLS 1.3 session tickets
         # (or anything else) sit unread makes the kernel send a TCP RST, and the receiver may then
@@ -239,7 +240,7 @@ def make_smtp_mailer(settings) -> Mailer:
     def send(msg: EmailMessage, recipients: list[str], timeout: float) -> None:
         if not settings.smtp_host:
             raise RuntimeError("SMTP is not configured")
-        context = ssl.create_default_context()
+        context = tls.client_context()
         if settings.smtp_security == "tls":
             client: smtplib.SMTP = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=timeout,
                                                     context=context)

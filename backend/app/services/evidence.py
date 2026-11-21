@@ -248,7 +248,8 @@ class WriteOnceDirectory:
 
     def put(self, name: str, data: bytes) -> Path:
         path = self.root / name
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+        # Read-only for the owner and its group, nothing for other users of the host.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o440)
         try:
             os.write(fd, data)
         finally:

@@ -60,6 +60,7 @@ class Edge:
         host, port = connect.rsplit(":", 1)
         self.addr, self.port = host, int(port)
         self.ctx = ssl.create_default_context(cafile=cacert) if cacert else ssl.create_default_context()
+        self.ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 
     def request(self, vhost: str, method: str, path: str, body: bytes | None = None,
                 headers: dict | None = None, sni: str | None = None) -> tuple[int, dict, bytes]:

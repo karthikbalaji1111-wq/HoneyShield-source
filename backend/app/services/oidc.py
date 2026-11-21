@@ -38,6 +38,7 @@ import jwt
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core import tls
 from app.models.sso import SsoLoginCode
 from app.models.user import User
 
@@ -64,8 +65,7 @@ class OidcError(Exception):
 # ------------------------------------------------------------------------------- HTTP
 
 def _context(settings) -> ssl.SSLContext:
-    return ssl.create_default_context(cafile=settings.oidc_ca_file) if settings.oidc_ca_file else \
-        ssl.create_default_context()
+    return tls.client_context(settings.oidc_ca_file)
 
 
 def _fetch_json(url: str, settings, data: dict[str, str] | None = None,

@@ -45,7 +45,7 @@ from typing import Any, Callable
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from app.core import decoy_paths, selftest
+from app.core import decoy_paths, selftest, tls
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.services.system_status import age_seconds, get_status, put_status
@@ -120,7 +120,7 @@ def _connection(url: str, connect: str | None, timeout: float, verify: bool,
     if parts.scheme == "https":
         # Unverified only when WATCHDOG_PROBE_VERIFY_TLS=false (self-signed first install); the
         # certificate check reports trust separately.
-        ctx = ssl.create_default_context(cafile=ca_file) if verify else ssl._create_unverified_context()  # nosec B323
+        ctx = tls.client_context(ca_file) if verify else tls.unverified_client_context()
         conn: http.client.HTTPConnection = _SNIHTTPSConnection(target_host, target_port, server_hostname=host,
                                                                 timeout=timeout, context=ctx)
     else:

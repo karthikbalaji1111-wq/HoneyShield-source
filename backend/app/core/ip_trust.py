@@ -63,7 +63,7 @@ def is_ip_in_trusted_proxies(peer_ip: str, trusted_proxies: list[str]) -> bool:
     except ValueError:
         return False
 
-    for proxy_pattern in trusted_proxies:
+    for position, proxy_pattern in enumerate(trusted_proxies, start=1):
         proxy_pattern = proxy_pattern.strip()
         if not proxy_pattern:
             continue
@@ -79,7 +79,7 @@ def is_ip_in_trusted_proxies(peer_ip: str, trusted_proxies: list[str]) -> bool:
                 if peer_addr == target_addr:
                     return True
         except ValueError:
-            logger.warning("Invalid trusted proxy pattern configured: %s", proxy_pattern)
+            logger.warning("TRUSTED_PROXIES entry %d is not an IP address or CIDR network; it is ignored", position)
             continue
 
     return False

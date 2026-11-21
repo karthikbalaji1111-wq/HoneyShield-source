@@ -120,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "ship":
             return _ship(args.out, required=True)
         if args.cmd == "export":
-            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+            # The export holds attacker IPs and request details: owner and group may read it, others not.
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o440)
             n = 0
             with os.fdopen(fd, "w") as fh:
                 for rec in evidence.export_since(session, args.tenant, args.after):

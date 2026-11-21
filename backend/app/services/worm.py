@@ -21,9 +21,9 @@ import hashlib
 import hmac
 import http.client
 import json
-import ssl
 import urllib.parse
 from app.core import safexml as ET
+from app.core import tls
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -128,7 +128,7 @@ class S3ObjectLockSink:
         if query:
             url += "?" + "&".join(f"{_uri_encode(k, True)}={_uri_encode(v, True)}" for k, v in sorted(query.items()))
         if self.scheme == "https":
-            ctx = ssl.create_default_context(cafile=self.cfg.ca_file)
+            ctx = tls.client_context(self.cfg.ca_file)
             conn: http.client.HTTPConnection = http.client.HTTPSConnection(self.host, self.port,
                                                                            timeout=self.cfg.timeout, context=ctx)
         else:
