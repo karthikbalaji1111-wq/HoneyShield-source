@@ -10,7 +10,7 @@
 #     bash -c "$(curl -fsSL .../install.sh)" -- --control-host app.example.com --ingest-host ingest.example.com --email you@example.com
 #
 #   Upgrade an existing installation to another version (keeps data and settings):
-#     ~/honeyshield/install.sh --upgrade --version 1.3.0
+#     ~/honeyshield/install.sh --upgrade --version 1.3.1
 #
 # Options:
 #   --dir DIR             where to install (default: ~/honeyshield)
@@ -22,6 +22,8 @@
 #   --https-port N        port for HTTPS (default: 8443 locally, 443 on a server)
 #   --registry PREFIX     image registry prefix (default: ghcr.io/karthikbalaji1111-wq/)
 #   --source DIR          copy the deployment files from a local checkout instead of downloading
+#   --build               build the images on this machine from the published source of --version
+#                         instead of downloading ready-made ones (with --source: from that checkout)
 #   --upgrade             switch an existing installation to --version and restart it
 #   --no-start            prepare everything but do not start
 #   --notify-url URL      where the watchdog sends problem notices (ntfy, Slack, Discord, any webhook)
@@ -37,7 +39,7 @@
 # Works with the bash 3.2 that macOS ships. Never prints a secret.
 set -euo pipefail
 
-HS_VERSION_DEFAULT="1.3.0"
+HS_VERSION_DEFAULT="1.3.1"
 DIR="${HOME}/honeyshield"
 VERSION="$HS_VERSION_DEFAULT"
 CONTROL_HOST=""
@@ -45,6 +47,8 @@ INGEST_HOST=""
 EMAIL=""
 REGISTRY="ghcr.io/karthikbalaji1111-wq/"
 SOURCE=""
+BUILD=0
+SOURCE_ARCHIVE_URL="${HS_SOURCE_ARCHIVE_URL:-https://github.com/karthikbalaji1111-wq/HoneyShield-source/archive/refs/tags}"
 HTTP_PORT=""
 HTTPS_PORT=""
 UPGRADE=0
@@ -73,6 +77,7 @@ while [ $# -gt 0 ]; do
     --http-port) HTTP_PORT="$2"; shift 2 ;;
     --https-port) HTTPS_PORT="$2"; shift 2 ;;
     --source) SOURCE="$2"; shift 2 ;;
+    --build) BUILD=1; shift ;;
     --upgrade) UPGRADE=1; shift ;;
     --no-start) START=0; shift ;;
     --notify-url) NOTIFY_URL="$2"; shift 2 ;;
@@ -129,7 +134,9 @@ for f in $FILES; do
     mv "${f}.download" "$f"
   fi
 done
-chmod +x scripts/quickstart_env.sh deploy/install/install.sh
+# Downloaded files arrive without the executable bit. The database runs init-db.sh on first start;
+# without +x it fails and the database roles are never created.
+chmod +x scripts/quickstart_env.sh scripts/restore_drill.sh deploy/install/install.sh docker/init-db.sh
 mkdir -p proxy/acme  # Let's Encrypt webroot (docs/deployment-guide.md, section 2)
 ln -sf deploy/install/install.sh install.sh
 
@@ -190,20 +197,40 @@ if [ -n "$DECOY_PATHS" ]; then
 fi
 [ -z "$HTTP_PORT" ] || set_env NGINX_HTTP_PORT "$HTTP_PORT"
 [ -z "$HTTPS_PORT" ] || set_env NGINX_TLS_PORT "$HTTPS_PORT"
+# Images built here carry no registry prefix, so they can never be mistaken for downloaded ones.
+[ "$BUILD" = 1 ] && REGISTRY=""
 set_env HS_IMAGE_REGISTRY "$REGISTRY"
 set_env HS_IMAGE_TAG "$VERSION"
 chmod 600 .env
 
 [ "$START" = 1 ] || { say "Prepared. Start with: cd ${DIR} && docker compose --env-file .env up -d --no-build --wait"; exit 0; }
 
-step "Downloading images (${REGISTRY}honeyshield-*:${VERSION})"
-if ! docker compose --env-file .env pull --quiet 2>pull.log; then
-  if grep -qiE "unauthorized|denied|authentication" pull.log; then
-    die "the image registry refused access. If the packages are private, run 'docker login ghcr.io' first."
+if [ "$BUILD" = 1 ]; then
+  if [ -n "$SOURCE" ]; then
+    src="$SOURCE"
+  else
+    step "Downloading the HoneyShield ${VERSION} source"
+    rm -rf src && mkdir src
+    curl -fsSL --retry 3 "${SOURCE_ARCHIVE_URL}/v${VERSION}.tar.gz" | tar -xz -C src --strip-components 1 \
+      || die "could not download the source of version ${VERSION}"
+    src="${DIR}/src"
   fi
-  cat pull.log >&2; die "could not download the images"
+  step "Building the images from source (several minutes the first time)"
+  for image in db backend edge; do
+    say "  honeyshield-${image}"
+    docker build --quiet -f "${src}/docker/Dockerfile.${image}" -t "honeyshield-${image}:${VERSION}" "$src" >/dev/null \
+      || die "building honeyshield-${image} failed: run the same docker build without --quiet to see why"
+  done
+else
+  step "Downloading images (${REGISTRY}honeyshield-*:${VERSION})"
+  if ! docker compose --env-file .env pull --quiet 2>pull.log; then
+    if grep -qiE "unauthorized|denied|authentication" pull.log; then
+      die "the image registry refused access. If the packages are private, run 'docker login ghcr.io' first, or install with --build."
+    fi
+    cat pull.log >&2; die "could not download the images"
+  fi
+  rm -f pull.log
 fi
-rm -f pull.log
 
 if ! grep -q '^BACKUP_AGE_RECIPIENTS=age1' .env; then
   step "Creating the backup encryption key"

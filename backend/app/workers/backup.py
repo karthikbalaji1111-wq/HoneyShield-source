@@ -319,7 +319,8 @@ def _loop(settings: Settings) -> int:
         finally:
             session.close()
         try:
-            Path("/tmp/backup.alive").touch()
+            # Liveness marker on the container's private tmpfs.
+            Path("/tmp/backup.alive").touch()  # nosec B108
         except OSError:
             pass
         _stop.wait(300)

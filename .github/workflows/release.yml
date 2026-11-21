@@ -1,0 +1,159 @@
+name: Release
+
+# Runs when a version tag is pushed (git tag v1.3.1 && git push origin v1.3.1). The same file runs in
+# two repositories:
+#   * the private development repository only copies the release's source to the public repository
+#     HoneyShield-source and pushes the same tag there (job "source-repo");
+#   * HoneyShield-source builds the three images from that public source, scans them and publishes
+#     them to GitHub Container Registry for linux/amd64 and linux/arm64 (job "images"), each with an
+#     SBOM, SLSA build provenance and GitHub's signed attestation. Anyone can then prove an image was
+#     built from a given public commit:
+#       gh attestation verify oci://ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.1 \
+#         --repo karthikbalaji1111-wq/HoneyShield-source
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Tag matches the chart's appVersion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Compare
+        run: |
+          app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' deploy/helm/honeyshield/Chart.yaml)"
+          if [ "v${app}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Chart.yaml appVersion ${app}"
+            exit 1
+          fi
+
+  images:
+    name: ${{ matrix.image }}
+    needs: version
+    # Images come only from the public source, so their provenance points at code anyone can read.
+    if: github.repository == 'karthikbalaji1111-wq/HoneyShield-source'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write        # push to ghcr.io
+      id-token: write        # keyless signing of the provenance attestation
+      attestations: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { image: honeyshield-backend, dockerfile: docker/Dockerfile.backend }
+          - { image: honeyshield-edge, dockerfile: docker/Dockerfile.edge }
+          - { image: honeyshield-db, dockerfile: docker/Dockerfile.db }
+    env:
+      IMAGE_NAME: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - name: Image reference
+        id: ref
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
+      # Nothing is published unless the exact build passes the same gate as CI.
+      - name: Build for the vulnerability gate
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          load: true
+          tags: gate/${{ matrix.image }}:candidate
+      - name: Vulnerability gate (fixable HIGH/CRITICAL fail the release)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.58.1 \
+            image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            "gate/${IMAGE_NAME}:candidate"
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550  # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
+        with:
+          images: ${{ steps.ref.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.licenses=LicenseRef-HoneyShield-Free-Use
+            org.opencontainers.image.source=https://github.com/karthikbalaji1111-wq/HoneyShield-source
+      - name: Build and publish (amd64 + arm64, with SBOM)
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Signed build provenance (GitHub artifact attestation)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-name: ${{ steps.ref.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  source-repo:
+    # Copies the complete source of this release (every tracked file except deploy/public/EXCLUDE)
+    # to the public repository karthikbalaji1111-wq/HoneyShield-source as one commit under the
+    # no-reply address, and pushes the same tag there, which starts the image build in that
+    # repository. The installer downloads its deployment files from that tag. Needs the secret
+    # SOURCE_REPO_DEPLOY_KEY: the private half of a deploy key with write access on that
+    # repository. Without it the job only warns, and the release is published by hand
+    # (scripts/publish_source_repo.sh, then push the tag).
+    name: Publish source (HoneyShield-source)
+    needs: version
+    if: github.repository == 'karthikbalaji1111-wq/HoneyShield'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HAS_KEY: ${{ secrets.SOURCE_REPO_DEPLOY_KEY != '' }}
+    steps:
+      - name: Deploy key missing
+        if: env.HAS_KEY != 'true'
+        run: echo "::warning::SOURCE_REPO_DEPLOY_KEY is not set. Publish the release by hand (scripts/publish_source_repo.sh)."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: env.HAS_KEY == 'true'
+        with:
+          path: src
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: env.HAS_KEY == 'true'
+        with:
+          repository: karthikbalaji1111-wq/HoneyShield-source
+          ssh-key: ${{ secrets.SOURCE_REPO_DEPLOY_KEY }}
+          path: dest
+          fetch-depth: 0
+      - name: Copy, commit, tag and push
+        if: env.HAS_KEY == 'true'
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          git -C dest config user.name "Karthik Balaji"
+          git -C dest config user.email "karthikbalaji1111-wq@users.noreply.github.com"
+          if git -C dest rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            echo "::notice::${VERSION} is already published in HoneyShield-source"; exit 0
+          fi
+          src/scripts/publish_source_repo.sh "$PWD/dest" "$VERSION"
+          git -C dest push origin HEAD:main "$VERSION"

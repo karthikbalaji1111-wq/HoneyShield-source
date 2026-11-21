@@ -71,8 +71,9 @@ Two repositories and the image registry work together:
    holds the complete source of each release as one commit under GitHub's no-reply address, so no
    personal address or history is published. Everything is copied except the paths listed in
    `deploy/public/EXCLUDE`. The installer downloads its deployment files from there, tagged per
-   version. The release workflow copies each release across after the images are published;
-   `scripts/publish_source_repo.sh` does the same by hand. CI fails if the installer needs a file
+   version. On a version tag the release workflow copies the release across and pushes the same tag
+   there; that repository then builds, scans, signs and publishes the images, so their build
+   record points at public code. `scripts/publish_source_repo.sh` does the copy by hand. CI fails if the installer needs a file
    that would be left out, or if a personal email address would be published.
 3. **The images** `honeyshield-backend`, `honeyshield-edge` and `honeyshield-db` in GitHub Container
    Registry. They must be public for the one-line install to work without a login: GitHub, your

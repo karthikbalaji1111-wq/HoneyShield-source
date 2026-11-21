@@ -40,7 +40,7 @@ class SecurityHeadersMiddleware:
     - X-Content-Type-Options: nosniff
     - X-Frame-Options: DENY (or configured)
     - Referrer-Policy: no-referrer (or configured)
-    - Content-Security-Policy: default-src 'none'; frame-ancestors 'none' (or configured)
+    - Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none' (or configured)
     - Permissions-Policy: accelerometer=(), camera=(), ... (or configured)
     - Cache-Control: no-store (for sensitive responses when not already set)
     - Strict-Transport-Security: Emitted ONLY when explicitly enabled AND request is HTTPS.

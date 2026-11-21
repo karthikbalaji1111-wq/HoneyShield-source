@@ -23,7 +23,7 @@ import http.client
 import json
 import ssl
 import urllib.parse
-import xml.etree.ElementTree as ET
+from app.core import safexml as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -158,7 +158,7 @@ class S3ObjectLockSink:
         retain = (now + timedelta(days=self.cfg.retention_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
         headers = {
             "Content-Type": "application/json",
-            "Content-MD5": base64.b64encode(hashlib.md5(data).digest()).decode(),  # noqa: S324 (S3 requirement)
+            "Content-MD5": base64.b64encode(hashlib.md5(data, usedforsecurity=False).digest()).decode(),  # S3 integrity header, not security
             "If-None-Match": "*",
             "x-amz-object-lock-mode": self.cfg.lock_mode,
             "x-amz-object-lock-retain-until-date": retain,

@@ -77,7 +77,8 @@ def _fetch_json(url: str, settings, data: dict[str, str] | None = None,
     if body is not None:
         req.add_header("Content-Type", "application/x-www-form-urlencoded")
     try:
-        with urllib.request.urlopen(req, timeout=10, context=_context(settings) if url.startswith("https") else None) as r:
+        # The scheme is checked above (https, or http only for a development IdP).
+        with urllib.request.urlopen(req, timeout=10, context=_context(settings) if url.startswith("https") else None) as r:  # nosec B310
             raw = r.read(MAX_BODY + 1)
     except urllib.error.HTTPError as exc:
         raise OidcError("idp_error", f"IdP returned HTTP {exc.code}") from None

@@ -14,7 +14,9 @@ first administrator's address. To try it on your own computer first, leave the o
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/karthikbalaji1111-wq/HoneyShield-source/main/deploy/install/install.sh)"
 ```
 
-Free for everyone ([licence](#licence)). The full source code is in this repository.
+Free for everyone ([licence](#licence)). The full source code is in this repository, the release
+images are built from it with a signed build record, and [every claim can be checked
+yourself](docs/verify-it-yourself.md).
 
 
 ## What HoneyShield does
@@ -245,8 +247,9 @@ working during an upgrade. The rules are in
 Every push runs the full suite with real PostgreSQL, S3 and Valkey (a skipped integration test
 fails the build), audits the Python dependencies for known vulnerabilities, checks the migrations
 upgrade, downgrade and upgrade again with no drift from the models, builds every image and scans it,
-validates the Compose files, the Helm chart, the nginx configuration and the Prometheus rules, and
-runs contract tests on the console.
+validates the Compose files, the Helm chart, the nginx configuration and the Prometheus rules,
+runs contract tests on the console, runs Bandit and CodeQL, and installs a stack from source to
+self-test it and scan it with OWASP ZAP.
 
 
 ## Documentation
@@ -267,6 +270,7 @@ runs contract tests on the console.
 - [Console design notes](docs/console-design.md)
 - [Production readiness](docs/production-readiness.md) and the [audit report](docs/remediation-audit-report.md)
 - [Is it ready for companies?](docs/industry-readiness.md), a plain re-audit with what is still missing
+- [Verify it yourself](docs/verify-it-yourself.md): signed images, tests, security scans, fuzzing and the outage experiment
 
 If this README and a document in `docs` ever disagree, the document is right.
 

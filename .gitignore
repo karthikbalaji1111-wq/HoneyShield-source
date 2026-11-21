@@ -36,3 +36,6 @@ backups/
 *.env
 .env.*
 !.env.example
+
+# Hypothesis (fuzz tests) example database
+.hypothesis/

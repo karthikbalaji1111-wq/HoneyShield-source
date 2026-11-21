@@ -10,7 +10,7 @@ import hashlib
 import http.client
 import ssl
 import urllib.parse
-import xml.etree.ElementTree as ET
+from app.core import safexml as ET
 from dataclasses import dataclass
 from pathlib import Path
 

@@ -22,6 +22,7 @@ Checked on 2026-11-17 from installed package metadata. A test
 | cffi | 2.1.1 | MIT-0 | https://github.com/python-cffi/cffi |
 | click | 8.5.1 | BSD-3-Clause | https://github.com/pallets/click |
 | cryptography | 50.0.2 | Apache-2.0 OR BSD-3-Clause | https://github.com/pyca/cryptography |
+| defusedxml | 0.7.1 | PSF-2.0 | https://github.com/tiran/defusedxml |
 | exceptiongroup | 1.3.1 | MIT | https://github.com/agronholm/exceptiongroup |
 | fastapi | 0.163.1 | MIT | https://github.com/fastapi/fastapi |
 | h11 | 0.16.0 | MIT | https://github.com/python-hyper/h11 |

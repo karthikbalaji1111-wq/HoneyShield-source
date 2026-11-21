@@ -1,0 +1,7 @@
+# OWASP ZAP baseline rules for the CI web scan. Any warning or failure not listed here fails the
+# build; each IGNORE says why the finding does not apply.
+10015	IGNORE	(Re-examine Cache-control: the console's static files may be cached; API responses send no-store)
+10027	IGNORE	(Suspicious comments: ordinary words such as 'user' in the console's JavaScript comments; no secrets)
+10049	IGNORE	(Non-storable content: informational only)
+10111	IGNORE	(Authentication request identified: informational; the sign-in form)
+10202	IGNORE	(Anti-CSRF tokens: the API authenticates with an Authorization header, never a cookie; forms are submitted by JavaScript as JSON)

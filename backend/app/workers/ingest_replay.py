@@ -20,6 +20,7 @@ import signal
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from app.core.replay_signing import replay_key, sign
@@ -83,9 +84,12 @@ def read_batch(spool: str, offset: int) -> tuple[list[dict], int]:
 def send(url: str, key: bytes, entries: list[dict], timeout: float = 30.0) -> dict:
     body = json.dumps({"entries": entries}, separators=(",", ":")).encode()
     stamp = str(int(time.time()))
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise ValueError("the replay URL must be http(s)")
     request = urllib.request.Request(url, data=body, method="POST", headers={
         "Content-Type": "application/json", "X-HS-Timestamp": stamp, "X-HS-Signature": sign(key, stamp, body)})
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - internal URL from config
+    # The scheme is checked above.
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
         return json.loads(response.read() or b"{}")
 
 
@@ -130,7 +134,8 @@ def main() -> None:  # pragma: no cover - long-running loop, exercised end to en
         try:
             run_once(spool, state_file, url, key)
             backoff = 2.0
-            with open("/tmp/ingest-replay.alive", "w") as fh:
+            # Liveness marker on the container's private tmpfs.
+            with open("/tmp/ingest-replay.alive", "w") as fh:  # nosec B108
                 fh.write(str(int(time.time())))
             _stop.wait(2.0)
         except (urllib.error.URLError, OSError, ValueError) as exc:

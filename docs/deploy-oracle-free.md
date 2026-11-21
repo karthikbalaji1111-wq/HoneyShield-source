@@ -185,7 +185,7 @@ docker compose --env-file .env exec watchdog python -m app.workers.watchdog --te
 docker compose --env-file .env exec watchdog python -m app.workers.watchdog --once
 ```
 
-Every line of the last command should say OK. Healthchecks.io should show the check as up.
+Every line of the last command should say OK (WARN marks something to fix that is not an outage). Healthchecks.io should show the check as up.
 
 ## 10. Lock down the console (optional)
 

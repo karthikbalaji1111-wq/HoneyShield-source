@@ -65,7 +65,7 @@
         </div>
         <h1>Sign in</h1>
         <p class="sub">Use your operator account.</p>
-        <form id="login-form" class="stack">
+        <form method="post" id="login-form" class="stack">
           <label>Email <input name="email" type="email" autocomplete="username" required></label>
           <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
           <label id="otp-row" hidden>Authenticator code or recovery code
@@ -88,7 +88,7 @@
         <h1>Reset your password</h1>
         <p class="sub">Enter your account email. If it exists, we send a link that works once for 30 minutes.
           If email is not set up on this deployment, ask an administrator for a reset link.</p>
-        <form id="forgot-form" class="stack">
+        <form method="post" id="forgot-form" class="stack">
           <label>Email <input name="email" type="email" autocomplete="username" required maxlength="254"></label>
           <button type="submit" class="block">Send reset link</button>
         </form>
@@ -101,7 +101,7 @@
       <div class="auth-card">
         <h1>Choose a new password</h1>
         <p class="sub">At least 12 characters. Every existing session is signed out. Two-factor authentication stays on.</p>
-        <form id="reset-form" class="stack">
+        <form method="post" id="reset-form" class="stack">
           <label>New password <input name="new_password" type="password" autocomplete="new-password" minlength="12" maxlength="72" required></label>
           <label>Repeat it <input name="confirm" type="password" autocomplete="new-password" minlength="12" maxlength="72" required></label>
           <button type="submit" class="block">Set password</button>
@@ -116,7 +116,7 @@
         <h1>Set up two-factor authentication</h1>
         <p id="mfa-intro" class="sub">Your role requires two-factor authentication. Until you finish, this
           session can only be used to enrol.</p>
-        <form id="mfa-passkey-form" class="stack subsection" hidden>
+        <form method="post" id="mfa-passkey-form" class="stack subsection" hidden>
           <div><h3>Use a passkey (recommended)</h3>
             <p class="hint">Your device's fingerprint, face or PIN, or a security key. A passkey only works on this
               site, so a fake sign-in page cannot steal it.</p></div>
@@ -125,7 +125,7 @@
           <button type="submit" class="block">Create a passkey</button>
         </form>
         <h3 id="mfa-totp-heading" class="subsection">Or use an authenticator app</h3>
-        <form id="mfa-setup-form" class="stack">
+        <form method="post" id="mfa-setup-form" class="stack">
           <label>Confirm your password <input name="current_password" type="password" autocomplete="current-password" required></label>
           <button type="submit" class="block">Generate secret</button>
         </form>
@@ -137,7 +137,7 @@
             <pre id="mfa-secret-uri" class="code"></pre>
           </div></div>
           <div class="step"><span class="step-n">2</span><div>
-            <form id="mfa-enable-form" class="stack">
+            <form method="post" id="mfa-enable-form" class="stack">
               <label>Enter the 6-digit code from the app <input name="code" inputmode="numeric" autocomplete="one-time-code"
                 pattern="[0-9]{6}" maxlength="6" required></label>
               <button type="submit" class="block">Turn on MFA</button>
@@ -188,7 +188,7 @@
       <div class="page-head"><div><h1>Projects &amp; decoys</h1><p class="sub">Each project is a protected domain. Decoys are planted artifacts that only an intruder would touch.</p></div></div>
       <div class="panel">
         <div class="panel-head"><h2>Projects</h2></div>
-        <form id="project-form" data-admin class="form-grid">
+        <form method="post" id="project-form" data-admin class="form-grid">
           <label>Name
             <input name="name" required maxlength="255" autocomplete="off" placeholder="Customer portal"></label>
           <label>Domain it protects
@@ -202,7 +202,7 @@
       <div class="panel" id="token-panel" hidden>
         <div class="panel-head"><h2>Decoys in <span id="tok-project" class="mono-inline"></span></h2>
           <span id="tokens-note" class="toolbar-note" aria-live="polite"></span></div>
-        <form id="generate-form" data-admin class="toolbar">
+        <form method="post" id="generate-form" data-admin class="toolbar">
           <select name="token_type" aria-label="Decoy type">
             <option value="URL">Hidden URL</option>
             <option value="LINK">Hidden link</option>
@@ -225,7 +225,7 @@
       <div class="page-head"><div><h1>Events</h1><p class="sub">Every recorded interaction with a decoy, newest first.</p></div>
         <button id="events-export" class="secondary" type="button">Export CSV</button></div>
       <div class="panel">
-        <form id="events-filter" class="toolbar" role="search" aria-label="Filter events">
+        <form method="post" id="events-filter" class="toolbar" role="search" aria-label="Filter events">
           <select name="severity" aria-label="Severity">
             <option value="">All severities</option><option value="CRITICAL">Critical</option>
             <option value="HIGH">High</option><option value="MEDIUM">Medium</option><option value="LOW">Low</option>
@@ -255,7 +255,7 @@
       <div class="page-head"><div><h1>Integrations</h1><p class="sub">Report-only credentials for the customer detection hook (API_KEY and FORM_FIELD decoys). The secret is shown once.</p></div></div>
       <div class="panel">
         <div class="panel-head"><h2>Credentials</h2></div>
-        <form id="integration-form" class="toolbar">
+        <form method="post" id="integration-form" class="toolbar">
           <select name="project" id="int-project" aria-label="Project"></select>
           <input name="label" placeholder="Label, e.g. auth-service" maxlength="255" aria-label="Label">
           <button type="submit">Create credential</button>
@@ -270,7 +270,7 @@
       <div class="page-head"><div><h1>Alerts</h1><p class="sub">Where alerts go when a decoy fires: signed webhooks, Slack or Teams, email, or a SIEM over syslog.</p></div></div>
       <div class="panel">
         <div class="panel-head"><h2>Destinations</h2></div>
-        <form id="alert-form" class="form-grid">
+        <form method="post" id="alert-form" class="form-grid">
           <label>Type
             <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option></select></label>
           <label class="span-2">Address
@@ -297,7 +297,7 @@
     <section id="view-audit" class="view" hidden>
       <div class="page-head"><div><h1>Audit log</h1><p class="sub">Security-relevant actions by users and services.</p></div></div>
       <div class="panel">
-        <form id="audit-form" class="toolbar" role="search" aria-label="Filter the audit log">
+        <form method="post" id="audit-form" class="toolbar" role="search" aria-label="Filter the audit log">
           <select name="event_type" id="audit-type" aria-label="Event type"><option value="">All events</option></select>
           <span id="audit-note" class="toolbar-note" aria-live="polite"></span>
         </form>
@@ -335,7 +335,7 @@
           users, alert destinations and evidence chain.</p></div>
         <button id="tenant-add" type="button" aria-expanded="false" aria-controls="tenant-form">Add tenant</button></div>
       <div class="panel">
-        <form id="tenant-form" class="form-grid" hidden>
+        <form method="post" id="tenant-form" class="form-grid" hidden>
           <label class="span-2">Name
             <input name="name" required maxlength="255" autocomplete="off" placeholder="Acme Corporation"></label>
           <label>Slug
@@ -356,7 +356,7 @@
       <div class="page-head"><div><h1>Users</h1><p class="sub">Operator accounts in your scope.</p></div>
         <button id="user-add" type="button" aria-expanded="false" aria-controls="user-form">Add user</button></div>
       <div class="panel">
-        <form id="user-form" class="form-grid" hidden>
+        <form method="post" id="user-form" class="form-grid" hidden>
           <label class="span-2">Email
             <input name="email" type="email" required maxlength="254" autocomplete="off" spellcheck="false" placeholder="name@company.com"></label>
           <label>Role
@@ -379,7 +379,7 @@
         <div class="panel-head"><h2>Reset MFA</h2></div>
         <p class="panel-text">Use when someone loses their authenticator: it signs them out everywhere and they enrol again
           at next sign-in. The reason is kept in the audit log.</p>
-        <form id="mfa-reset-form" class="toolbar">
+        <form method="post" id="mfa-reset-form" class="toolbar">
           <select name="user_id" required aria-label="User whose MFA to reset"></select>
           <input name="reason" class="grow" minlength="10" maxlength="1000" required placeholder="Reason (audited), e.g. lost phone, identity verified" aria-label="Reason">
           <button type="submit" class="danger">Reset MFA</button>
@@ -389,7 +389,7 @@
         <div class="panel-head"><h2>Password reset link</h2></div>
         <p class="panel-text">Creates a link that works once within 30 minutes. Give it to the person through a channel you trust.
           It changes nothing until they use it and does not remove their MFA. The reason is kept in the audit log.</p>
-        <form id="pw-reset-form" class="toolbar">
+        <form method="post" id="pw-reset-form" class="toolbar">
           <select name="user_id" required aria-label="User who needs a password reset link"></select>
           <input name="reason" class="grow" minlength="10" maxlength="1000" required placeholder="Reason (audited), e.g. forgot password, identity verified by phone" aria-label="Reason">
           <button type="submit" class="secondary">Create link</button>
@@ -406,13 +406,13 @@
         <div id="mfa-status" class="panel-body stack">
           <p id="mfa-status-text"></p>
           <div><button id="mfa-start" type="button" hidden>Set up MFA</button></div>
-          <form id="mfa-regen-form" class="stack subsection" hidden>
+          <form method="post" id="mfa-regen-form" class="stack subsection" hidden>
             <div><h3>Recovery codes</h3>
               <p class="hint">Issues a new set of one-time codes. Your previous codes stop working.</p></div>
             <label>Authenticator code <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
             <div><button type="submit" class="secondary">Generate new recovery codes</button></div>
           </form>
-          <form id="mfa-disable-form" class="stack subsection" hidden>
+          <form method="post" id="mfa-disable-form" class="stack subsection" hidden>
             <div><h3>Turn off two-factor authentication</h3>
               <p class="hint">Signs you out on every device. Your role decides whether this is allowed.</p></div>
             <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
@@ -430,13 +430,13 @@
             app off.</p>
           <p id="passkey-unsupported" class="callout warn" hidden>This browser does not support passkeys.</p>
           <div id="passkey-table"></div>
-          <form id="passkey-add-form" class="stack subsection">
+          <form method="post" id="passkey-add-form" class="stack subsection">
             <div><h3>Add a passkey</h3></div>
             <label>Name <input name="name" maxlength="64" required placeholder="e.g. Work laptop"></label>
             <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
             <div><button type="submit" class="secondary">Add passkey</button></div>
           </form>
-          <form id="passkey-remove-form" class="stack subsection" hidden>
+          <form method="post" id="passkey-remove-form" class="stack subsection" hidden>
             <div><h3>Remove <span id="passkey-remove-name"></span></h3></div>
             <input type="hidden" name="id">
             <label>Password <input name="current_password" type="password" autocomplete="current-password" required></label>
@@ -447,7 +447,7 @@
       </div>
       <div class="panel narrow">
         <div class="panel-head"><h2>Password</h2></div>
-        <form id="password-form" class="panel-body stack">
+        <form method="post" id="password-form" class="panel-body stack">
           <label>Current password <input name="current_password" type="password" autocomplete="current-password" required></label>
           <label><span>New password <span class="hint">(12+ characters)</span></span><input name="new_password" type="password" autocomplete="new-password" minlength="12" required></label>
           <div><button type="submit">Change password</button></div>
@@ -458,7 +458,7 @@
         <p class="panel-text">For scripts, CI pipelines and SIEM pull jobs. A key acts as you (your role and tenant), never
           as an administrator of accounts: it cannot manage users or other keys. Read keys can only fetch data.
           The key is shown once; it is stored only as a hash.</p>
-        <form id="key-form" class="toolbar">
+        <form method="post" id="key-form" class="toolbar">
           <input name="name" class="grow" required maxlength="100" placeholder="What uses this key, e.g. SIEM pull job" aria-label="Key name">
           <select name="scope" aria-label="Scope"><option value="read">Read only</option><option value="write">Read and write</option></select>
           <select name="expires_in_days" aria-label="Expiry"><option value="30">30 days</option><option value="90" selected>90 days</option><option value="180">180 days</option><option value="365">1 year</option></select>

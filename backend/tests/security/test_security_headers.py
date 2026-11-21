@@ -60,7 +60,7 @@ class TestSecurityHeadersConfigurationValidation:
         assert settings.security_headers_x_content_type_options == "nosniff"
         assert settings.security_headers_x_frame_options == "DENY"
         assert settings.security_headers_referrer_policy == "no-referrer"
-        assert settings.security_headers_csp == "default-src 'none'; frame-ancestors 'none'"
+        assert settings.security_headers_csp == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert "camera=()" in settings.security_headers_permissions_policy
         assert "microphone=()" in settings.security_headers_permissions_policy
         assert "geolocation=()" in settings.security_headers_permissions_policy
@@ -145,7 +145,7 @@ class TestSecurityHeadersOnSuccess:
         assert headers.get("x-content-type-options") == "nosniff"
         assert headers.get("x-frame-options") == "DENY"
         assert headers.get("referrer-policy") == "no-referrer"
-        assert headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert "camera=()" in headers.get("permissions-policy", "")
         assert "microphone=()" in headers.get("permissions-policy", "")
         assert "geolocation=()" in headers.get("permissions-policy", "")
@@ -160,7 +160,7 @@ class TestSecurityHeadersOnSuccess:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_v1_health_endpoint_has_all_security_headers(self, client: TestClient):
@@ -170,7 +170,7 @@ class TestSecurityHeadersOnSuccess:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_authenticated_endpoint_has_all_security_headers(
@@ -182,7 +182,7 @@ class TestSecurityHeadersOnSuccess:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
 
@@ -201,7 +201,7 @@ class TestSecurityHeadersOnErrorResponses:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_403_forbidden_has_security_headers(
@@ -218,7 +218,7 @@ class TestSecurityHeadersOnErrorResponses:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_404_not_found_has_security_headers(self, client: TestClient):
@@ -228,7 +228,7 @@ class TestSecurityHeadersOnErrorResponses:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_413_payload_too_large_has_security_headers(self, client: TestClient):
@@ -243,7 +243,7 @@ class TestSecurityHeadersOnErrorResponses:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_429_rate_limit_has_security_headers(self, client: TestClient):
@@ -260,7 +260,7 @@ class TestSecurityHeadersOnErrorResponses:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
         assert "retry-after" in resp.headers
 
@@ -273,7 +273,7 @@ class TestSecurityHeadersOnErrorResponses:
             assert resp.headers.get("x-content-type-options") == "nosniff"
             assert resp.headers.get("x-frame-options") == "DENY"
             assert resp.headers.get("referrer-policy") == "no-referrer"
-            assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+            assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
             assert resp.headers.get("cache-control") == "no-store"
 
 
@@ -336,7 +336,7 @@ class TestEndpointSpecificHeaderPreservation:
             assert headers.get("x-content-type-options") == "nosniff"
             assert headers.get("x-frame-options") == "DENY"
             assert headers.get("referrer-policy") == "no-referrer"
-            assert headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+            assert headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
 # ===========================================================================
@@ -535,7 +535,7 @@ class TestCoexistenceWithCORS:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_simple_cross_origin_request_receives_both_cors_and_security_headers(
@@ -552,7 +552,7 @@ class TestCoexistenceWithCORS:
         # Security
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
     def test_untrusted_cross_origin_request_receives_security_headers(
         self, cors_client: TestClient
@@ -568,7 +568,7 @@ class TestCoexistenceWithCORS:
         # Security present
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
 # ===========================================================================
@@ -588,7 +588,7 @@ class TestPublicIngestionSecurityHeaders:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
 
     def test_pixel_ingestion_has_security_headers(
@@ -601,7 +601,7 @@ class TestPublicIngestionSecurityHeaders:
         assert resp.headers.get("x-content-type-options") == "nosniff"
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
-        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'"
+        assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
 # ===========================================================================

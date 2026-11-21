@@ -96,6 +96,12 @@ server {
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy no-referrer always;
+    # Decoy responses carry nothing a browser could run or embed. Pixels must load from other
+    # origins (decoy documents and emails), hence cross-origin; the backend's own copies of these
+    # headers are hidden in each location so every response has exactly one.
+    add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()" always;
+    add_header Cross-Origin-Resource-Policy cross-origin always;
 
     # Decoy hits. If the backend cannot record one (5xx, timeout, unreachable), the edge keeps it in
     # the spool and answers exactly as the backend would, so no hit is lost during an outage and the
@@ -105,6 +111,8 @@ server {
         limit_except GET HEAD POST { deny all; }
         proxy_pass $hs_backend;
         include /etc/nginx/hs_proxy_headers.conf;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header Permissions-Policy;
         proxy_connect_timeout 3s;
         proxy_read_timeout 15s;
         proxy_intercept_errors on;
@@ -116,6 +124,8 @@ server {
         limit_except GET HEAD POST { deny all; }
         proxy_pass $hs_backend;
         include /etc/nginx/hs_proxy_headers.conf;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header Permissions-Policy;
         proxy_connect_timeout 3s;
         proxy_read_timeout 15s;
         proxy_intercept_errors on;
@@ -138,6 +148,8 @@ server {
         limit_except GET POST { deny all; }
         proxy_pass $hs_backend;
         include /etc/nginx/hs_proxy_headers.conf;
+        proxy_hide_header Content-Security-Policy;
+        proxy_hide_header Permissions-Policy;
         proxy_read_timeout 15s;
     }
 
@@ -173,6 +185,7 @@ server {
     limit_conn hs_conn 100;
 
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Cross-Origin-Resource-Policy same-origin always;
 
     # Only the addresses in HS_CONTROL_ALLOW_CIDRS may reach the console and API (403 for the rest);
     # the file is a comment when the list is empty. The backend checks the same list.
@@ -239,6 +252,12 @@ server {
         add_header X-Content-Type-Options nosniff always;
         add_header Referrer-Policy no-referrer always;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        # Passkeys need the WebAuthn features; everything else a page could ask for is off. The
+        # console loads only its own files, so it can isolate itself from other origins.
+        add_header Permissions-Policy "publickey-credentials-create=(self), publickey-credentials-get=(self), accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()" always;
+        add_header Cross-Origin-Opener-Policy same-origin always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Cross-Origin-Resource-Policy same-origin always;
     }
 
     location / {

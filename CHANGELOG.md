@@ -3,9 +3,42 @@
 Versions follow [Semantic Versioning](https://semver.org). The Helm chart's `appVersion` and the
 release tag (`vX.Y.Z`) always match; the release workflow refuses a tag that does not.
 
-## Unreleased
+## 1.3.1 — 2026-11-20
+
+### Upgrade notes
+* `~/honeyshield/install.sh --upgrade --version 1.3.1`. No database changes. Images now come from
+  the public repository `HoneyShield-source` with a signed build record; check one with
+  `gh attestation verify oci://ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.3.1 --repo karthikbalaji1111-wq/HoneyShield-source`.
+
+### Fixed
+* Installing with the one-line command failed on a fresh machine: downloaded files are not
+  executable, so the database never ran `docker/init-db.sh` and its roles were missing. The installer
+  now marks the scripts executable, and CI installs from non-executable copies to keep it that way.
+* Two `Strict-Transport-Security` headers on proxied responses (edge and backend); the edge is now
+  the only source.
+* Console forms submitted by the browser itself (for example if the script failed to load) used GET,
+  which would put a password in the URL. Every form now uses POST.
+* The watchdog's `--once` output showed warnings as FAIL; it now shows WARN.
+
+### Added
+* Images are built and signed in the public repository, so anyone can prove an image came from a
+  given public commit (`docs/verify-it-yourself.md`).
+* `install.sh --build`: builds every image on the machine from the published source instead of
+  downloading them.
+* Security analysis in public CI: CodeQL (Python, JavaScript, workflows), Bandit (medium and high
+  findings fail the build), and an OWASP ZAP baseline scan of a freshly installed, self-tested
+  stack. Accepted findings are documented next to the code and in `.zap/rules.tsv`.
+* Fuzz tests (Hypothesis) for the WebAuthn/CBOR, backup encryption, S3 XML and decoy path parsers
+  and for the public decoy endpoints over HTTP.
+* `scripts/reproduce_outage.sh`: sends decoy hits while the backend and then the database are down
+  and checks every one is recorded exactly once and the evidence chain verifies.
+* `docs/verify-it-yourself.md`: how to check every claim independently.
 
 ### Changed
+* XML from S3-compatible servers is parsed with `defusedxml` (no DTDs, no entity expansion).
+* Stricter headers: `base-uri` and `form-action` in the default Content-Security-Policy; on the
+  decoy host a Content-Security-Policy, Permissions-Policy and Cross-Origin-Resource-Policy on every
+  response; on the console a Permissions-Policy that allows only passkeys, and cross-origin isolation.
 * Licence: free for everyone, for any purpose; selling, redistributing or hosting HoneyShield for
   others is not allowed. Not an open-source licence.
 * The full source is public in `HoneyShield-source`, one commit per release under GitHub's no-reply

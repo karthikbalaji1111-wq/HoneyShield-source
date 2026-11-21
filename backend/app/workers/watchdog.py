@@ -55,7 +55,8 @@ logger = logging.getLogger("honeyshield.watchdog")
 CRITICAL = "critical"
 WARNING = "warning"
 STATUS_KEY = "watchdog"
-ALIVE_FILE = "/tmp/watchdog.alive"
+# Liveness marker on the container's private tmpfs.
+ALIVE_FILE = "/tmp/watchdog.alive"  # nosec B108
 
 LABELS = {
     "database": "Database",
@@ -117,7 +118,9 @@ def _connection(url: str, connect: str | None, timeout: float, verify: bool,
         h, _, p = connect.rpartition(":")
         target_host, target_port = h.strip("[]"), int(p)
     if parts.scheme == "https":
-        ctx = ssl.create_default_context(cafile=ca_file) if verify else ssl._create_unverified_context()  # noqa: S323
+        # Unverified only when WATCHDOG_PROBE_VERIFY_TLS=false (self-signed first install); the
+        # certificate check reports trust separately.
+        ctx = ssl.create_default_context(cafile=ca_file) if verify else ssl._create_unverified_context()  # nosec B323
         conn: http.client.HTTPConnection = _SNIHTTPSConnection(target_host, target_port, server_hostname=host,
                                                                 timeout=timeout, context=ctx)
     else:
@@ -632,7 +635,8 @@ def main(argv: list[str] | None = None) -> int:
             pass
         if args.once:
             for c in (state or {}).get("checks", []):
-                print(f"{'OK  ' if c['ok'] else 'FAIL'} {c['label']:<22} {c['detail']}")
+                status = "OK  " if c["ok"] else ("FAIL" if c.get("severity") == CRITICAL else "WARN")
+                print(f"{status} {c['label']:<22} {c['detail']}")
             return 0 if state and state["healthy"] else 1
         _stop.wait(settings.watchdog_interval_seconds)
     logger.info("Watchdog stopped")

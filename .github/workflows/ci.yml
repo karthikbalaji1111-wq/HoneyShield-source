@@ -58,7 +58,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt pytest pytest-asyncio httpx pip-audit
+          pip install -r backend/requirements.txt pytest pytest-asyncio httpx pip-audit hypothesis==6.140.0 bandit==1.8.6
+      - name: Static security analysis (Bandit; medium and high findings fail the build)
+        run: bandit -r backend/app -q -ll -ii
       - name: Dependency audit (known vulnerabilities)
         run: pip-audit -r backend/requirements.txt --strict
       - name: Backup tools (pg_dump/pg_restore 16 like the server, and the reference age binary)
@@ -185,12 +187,15 @@ jobs:
       - name: Installer passes shellcheck and prepares an installation from this checkout
         run: |
           docker run --rm -v "$PWD/deploy/install:/s:ro" koalaman/shellcheck:v0.10.0 /s/install.sh
-          bash deploy/install/install.sh --source "$PWD" --dir "$RUNNER_TEMP/hs-install" --no-start --version 1.3.0 \
+          # Downloads arrive without the executable bit: copy the files the same way.
+          mkdir -p "$RUNNER_TEMP/plain" && git ls-files -z | xargs -0 -I{} install -D -m 644 {} "$RUNNER_TEMP/plain/{}"
+          bash deploy/install/install.sh --source "$RUNNER_TEMP/plain" --dir "$RUNNER_TEMP/hs-install" --no-start --version 1.3.0 \
             --decoy-paths static/v2,assets/img,api-telemetry --admin-cidrs 203.0.113.0/24
           grep -q '^HS_DECOY_LINK_PATH=static/v2$' "$RUNNER_TEMP/hs-install/.env"
           grep -q '^HS_INTERNAL_IP_RANGE=172.28.0.128/25$' "$RUNNER_TEMP/hs-install/.env"
           docker compose --project-directory "$RUNNER_TEMP/hs-install" --env-file "$RUNNER_TEMP/hs-install/.env" config -q
           test "$(stat -c %a "$RUNNER_TEMP/hs-install/.env")" = "600"
+          test -x "$RUNNER_TEMP/hs-install/docker/init-db.sh"
       - name: Public source copy has every file the installer needs, and nothing personal
         run: |
           docker run --rm -v "$PWD/scripts:/s:ro" koalaman/shellcheck:v0.10.0 /s/publish_source_repo.sh
@@ -260,3 +265,43 @@ jobs:
           name: sbom-cyclonedx
           path: sbom/*.cdx.json
           retention-days: 90
+
+  web-scan:
+    # Installs HoneyShield the way a customer would (from source, with --build), checks that it
+    # detects (the watchdog's self-test sends a decoy hit through the edge), then scans both host
+    # names with OWASP ZAP's baseline scan. Findings not accepted in .zap/rules.tsv fail the build.
+    name: Install from source, self-test and web scan (OWASP ZAP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Install and start from this checkout, building every image from source
+        run: |
+          version="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' deploy/helm/honeyshield/Chart.yaml)"
+          bash deploy/install/install.sh --source "$PWD" --build --version "$version" --dir "$RUNNER_TEMP/hs" < /dev/null
+      - name: Detection self-test passes through the edge
+        working-directory: ${{ runner.temp }}/hs
+        run: |
+          docker compose --env-file .env exec -T watchdog python -m app.workers.watchdog --once | tee watchdog.txt || true
+          grep -q '^OK   Detection self-test' watchdog.txt
+          grep -q '^OK   Database' watchdog.txt
+      - name: OWASP ZAP baseline scan of the console and the decoy host
+        run: |
+          mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap" && cp .zap/rules.tsv "$RUNNER_TEMP/zap/"
+          scan() {
+            docker run --rm --network host --add-host app.localhost:127.0.0.1 --add-host ingest.localhost:127.0.0.1 \
+              -v "$RUNNER_TEMP/zap:/zap/wrk:rw" \
+              ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
+              zap-baseline.py -t "$1" -c rules.tsv -m 2 -r "$2.html" -J "$2.json"
+          }
+          status=0
+          scan https://app.localhost:8443/console/ console || status=$?
+          scan https://ingest.localhost:8443/t/zap-probe-token decoys || status=$?
+          exit "$status"
+      - name: Keep the scan reports with the run
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: zap-reports
+          path: ${{ runner.temp }}/zap/*.html
+          if-no-files-found: ignore

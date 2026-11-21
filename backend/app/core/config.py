@@ -249,7 +249,7 @@ class Settings(BaseSettings):
     security_headers_x_content_type_options: str = Field(default="nosniff")
     security_headers_x_frame_options: str = Field(default="DENY")
     security_headers_referrer_policy: str = Field(default="no-referrer")
-    security_headers_csp: str = Field(default="default-src 'none'; frame-ancestors 'none'")
+    security_headers_csp: str = Field(default="default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
     security_headers_permissions_policy: str = Field(
         default="accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
     )
