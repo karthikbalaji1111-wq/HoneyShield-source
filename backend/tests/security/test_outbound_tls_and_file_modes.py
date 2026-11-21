@@ -44,7 +44,7 @@ def test_evidence_files_are_not_readable_by_other_users(tmp_path):
     path = evidence.WriteOnceDirectory(tmp_path).put("checkpoint-test.json", b"[]")
     mode = stat.S_IMODE(path.stat().st_mode)
     assert mode & 0o222 == 0, "evidence files must be read-only"
-    assert mode & 0o007 == 0, "other users of the host must not read evidence"
+    assert mode & 0o077 == 0, "only the owner may read evidence"
     assert mode & 0o400
 
 

@@ -196,6 +196,13 @@ jobs:
           docker compose --project-directory "$RUNNER_TEMP/hs-install" --env-file "$RUNNER_TEMP/hs-install/.env" config -q
           test "$(stat -c %a "$RUNNER_TEMP/hs-install/.env")" = "600"
           test -x "$RUNNER_TEMP/hs-install/docker/init-db.sh"
+          # "<dir>/install.sh --upgrade" upgrades <dir>, not ~/honeyshield (fixed in 1.3.3).
+          mkdir -p "$RUNNER_TEMP/home"
+          HOME="$RUNNER_TEMP/home" "$RUNNER_TEMP/hs-install/install.sh" --upgrade --source "$RUNNER_TEMP/plain" --no-start --version 1.3.0
+          test ! -e "$RUNNER_TEMP/home/honeyshield"
+          # An upgrade with nothing to upgrade fails before creating or downloading anything.
+          ! HOME="$RUNNER_TEMP/home" bash deploy/install/install.sh --upgrade --source "$RUNNER_TEMP/plain" --no-start --dir "$RUNNER_TEMP/none" 2>/dev/null
+          test ! -e "$RUNNER_TEMP/none"
       - name: Public source copy has every file the installer needs, and nothing personal
         run: |
           docker run --rm -v "$PWD/scripts:/s:ro" koalaman/shellcheck:v0.10.0 /s/publish_source_repo.sh

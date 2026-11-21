@@ -3,6 +3,28 @@
 Versions follow [Semantic Versioning](https://semver.org). The Helm chart's `appVersion` and the
 release tag (`vX.Y.Z`) always match; the release workflow refuses a tag that does not.
 
+## 1.3.3 — 2026-11-21
+
+### Upgrade notes
+* `~/honeyshield/install.sh --upgrade --version 1.3.3`, or for an installation made with `--dir`:
+  `<dir>/install.sh --upgrade --dir <dir> --version 1.3.3` (the `--dir` is only needed to upgrade
+  *to* 1.3.3; from then on `<dir>/install.sh --upgrade` finds its own directory). No database or
+  configuration changes.
+
+### Fixed
+* `<dir>/install.sh --upgrade` ignored `<dir>` and looked in `~/honeyshield`, so an installation
+  made with `--dir` could not be upgraded with the command the installer prints. The installer now
+  defaults to the installation it is run from (recognised by its `.env`, `docker-compose.yml` and
+  `install.sh` link, which a source checkout does not have).
+* A failed `--upgrade` (no installation in the directory) created the directory and downloaded the
+  deployment files before giving up. It now stops before touching anything.
+
+### Security
+* Evidence checkpoints and exports are created `0400` (owner only) instead of 1.3.2's `0440`: no
+  other process reads them, so the group needs no access.
+* The tests and `scripts/verify_deployment.py` build their TLS contexts the same way as the
+  application (TLS 1.2 minimum), which also closes the two CodeQL alerts that followed those paths.
+
 ## 1.3.2 — 2026-11-21
 
 From the first public CodeQL scan of `HoneyShield-source` (16 alerts: 5 changed here, 11 reviewed

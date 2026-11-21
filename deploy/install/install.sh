@@ -10,7 +10,7 @@
 #     bash -c "$(curl -fsSL .../install.sh)" -- --control-host app.example.com --ingest-host ingest.example.com --email you@example.com
 #
 #   Upgrade an existing installation to another version (keeps data and settings):
-#     ~/honeyshield/install.sh --upgrade --version 1.3.2
+#     ~/honeyshield/install.sh --upgrade --version 1.3.3
 #
 # Options:
 #   --dir DIR             where to install (default: ~/honeyshield)
@@ -39,8 +39,19 @@
 # Works with the bash 3.2 that macOS ships. Never prints a secret.
 set -euo pipefail
 
-HS_VERSION_DEFAULT="1.3.2"
+HS_VERSION_DEFAULT="1.3.3"
+# Run from an installation as <dir>/install.sh (or <dir>/deploy/install/install.sh), the default
+# directory is that installation, so "<dir>/install.sh --upgrade" upgrades <dir>. An installation is
+# recognised by its .env, docker-compose.yml and the install.sh link (a source checkout has no such
+# link). Run through curl there is no script file and the default is ~/honeyshield. --dir always wins.
 DIR="${HOME}/honeyshield"
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  _self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  for _c in "$_self" "$_self/../.."; do
+    if [ -L "$_c/install.sh" ] && [ -f "$_c/.env" ] && [ -f "$_c/docker-compose.yml" ]; then DIR="$(cd "$_c" && pwd)"; break; fi
+  done
+  unset _self _c
+fi
 VERSION="$HS_VERSION_DEFAULT"
 CONTROL_HOST=""
 INGEST_HOST=""
@@ -118,6 +129,9 @@ done
 docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin (docker compose) is required"
 docker info >/dev/null 2>&1 || die "Docker is installed but not running: start Docker and run this again"
 say "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null) with Compose $(docker compose version --short 2>/dev/null)"
+
+# Check before anything is created or downloaded, so a mistyped --dir leaves nothing behind.
+[ "$UPGRADE" = 0 ] || [ -f "$DIR/.env" ] || die "no installation found in ${DIR} to upgrade (use --dir)"
 
 step "Fetching HoneyShield ${VERSION} deployment files into ${DIR}"
 mkdir -p "$DIR"

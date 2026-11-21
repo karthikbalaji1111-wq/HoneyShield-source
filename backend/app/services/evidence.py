@@ -248,8 +248,8 @@ class WriteOnceDirectory:
 
     def put(self, name: str, data: bytes) -> Path:
         path = self.root / name
-        # Read-only for the owner and its group, nothing for other users of the host.
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o440)
+        # Read-only, and only for the checkpointer's own user (root can always read it).
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
         try:
             os.write(fd, data)
         finally:

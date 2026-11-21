@@ -18,6 +18,7 @@ from email.message import EmailMessage
 
 import pytest
 
+from app.core import tls
 from app.core.config import get_settings
 from app.models.alerting import AlertDestination, AlertFormat, OutboxEvent, OutboxStatus
 from app.models.audit_log import AuditLog
@@ -420,7 +421,7 @@ def syslog_server(tls_cert):
 
 def test_real_tls_syslog_delivery(syslog_server):
     port, crt, received, _ = syslog_server
-    ctx = ssl.create_default_context(cafile=str(crt))
+    ctx = tls.client_context(str(crt))
     target = ValidatedTarget("tls", "siem.test", port, "", ("127.0.0.1",))
     frame = channels.syslog_frame(channels.cef_message(DATA), "HIGH", "ingest.example.com", "hs-7")
     channels.syslog_sender(target, frame, 5.0, context=ctx)
@@ -443,7 +444,7 @@ def test_tls_syslog_refuses_an_untrusted_certificate(syslog_server):
 
 def test_tls_syslog_refuses_a_hostname_mismatch(syslog_server):
     port, crt, received, _ = syslog_server
-    ctx = ssl.create_default_context(cafile=str(crt))
+    ctx = tls.client_context(str(crt))
     target = ValidatedTarget("tls", "other.test", port, "", ("127.0.0.1",))
     with pytest.raises(ssl.SSLError):
         channels.syslog_sender(target, b"5 hello", 5.0, context=ctx)
