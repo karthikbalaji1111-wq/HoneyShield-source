@@ -17,7 +17,7 @@ class UserRepository(BaseRepository[User]):
 
     def get_by_email(self, email: str) -> User | None:
         """Return the User with the given email address, or None."""
-        # HONEY-022: identities are case-insensitive (DB enforces unique lower(email)).
+        # Identities are case-insensitive (DB enforces unique lower(email)).
         stmt = select(User).where(func.lower(User.email) == email.strip().lower())
         return self.session.scalar(stmt)
 

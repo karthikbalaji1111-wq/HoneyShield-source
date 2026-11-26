@@ -1,4 +1,4 @@
-"""Record detection-event provenance (HONEY-006).
+"""Record detection-event provenance.
 
 Revision ID: 20261113_01
 Revises: 20261019_01
@@ -16,7 +16,7 @@ Forensic-safety notes
   relabelled PUBLIC_INGEST.
 - The default is dropped afterwards so every new insert must state its source.
 - created_by_user_id has no ON DELETE action: SET NULL would be an UPDATE rejected by
-  the immutability trigger (HONEY-010).
+  the immutability trigger.
 - Both CHECK constraints are added NOT VALID and then validated, so validation scans
   without blocking writes for the whole scan on large tables.
 """

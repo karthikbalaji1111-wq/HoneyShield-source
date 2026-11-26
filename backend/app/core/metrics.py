@@ -14,6 +14,8 @@ _counters: dict[tuple[str, tuple[tuple[str, str], ...]], float] = defaultdict(fl
 HELP = {
     "honeyshield_ingest_requests_total": "Public ingestion requests by outcome.",
     "honeyshield_integration_reports_total": "Customer-hook requests by outcome.",
+    "honeyshield_dns_hits_total": "DNS decoy hits from the DNS listener by outcome.",
+    "honeyshield_cloud_canary_events_total": "Cloud canary CloudTrail events by outcome.",
     "honeyshield_http_requests_total": "HTTP requests by status class.",
     "honeyshield_http_request_duration_seconds_sum": "Total request processing time.",
     "honeyshield_http_request_duration_seconds_count": "Requests timed.",

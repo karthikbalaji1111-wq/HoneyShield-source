@@ -19,7 +19,6 @@ from sqlalchemy import JSON, create_engine, event
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, sessionmaker
 
-# ---------------------------------------------------------------------------
 
 from app.core.security import create_access_token, get_password_hash
 from app.db.session import get_db
@@ -31,10 +30,6 @@ from app.models.project import Project
 from app.models.tenant import Tenant
 from app.models.user import User
 
-
-# ---------------------------------------------------------------------------
-# Database Engine — SQLite in-memory with JSONB→JSON remapping
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def engine():
@@ -94,11 +89,6 @@ def db_session(engine):
     connection.close()
 
 
-
-# ---------------------------------------------------------------------------
-# FastAPI TestClient wired to the test DB session
-# ---------------------------------------------------------------------------
-
 @pytest.fixture()
 def client(db_session):
     """FastAPI TestClient with get_db overridden to the test session."""
@@ -124,10 +114,6 @@ def reset_rate_limiters():
     yield
     reset_all_limiters()
 
-
-# ---------------------------------------------------------------------------
-# Domain fixtures — two-tenant scenario
-# ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def tenant_a(db_session: Session) -> Tenant:
@@ -215,10 +201,6 @@ def inactive_user(db_session: Session, tenant_a: Tenant) -> User:
     return user
 
 
-# ---------------------------------------------------------------------------
-# Project fixtures
-# ---------------------------------------------------------------------------
-
 @pytest.fixture()
 def project_a(db_session: Session, tenant_a: Tenant) -> Project:
     project = Project(
@@ -244,10 +226,6 @@ def project_b(db_session: Session, tenant_b: Tenant) -> Project:
     db_session.flush()
     return project
 
-
-# ---------------------------------------------------------------------------
-# HoneyToken fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def token_a(db_session: Session, project_a: Project) -> HoneyToken:
@@ -276,10 +254,6 @@ def token_b(db_session: Session, project_b: Project) -> HoneyToken:
     db_session.flush()
     return token
 
-
-# ---------------------------------------------------------------------------
-# JWT helpers
-# ---------------------------------------------------------------------------
 
 def make_token(user: User) -> str:
     """Create a valid JWT for the given user."""

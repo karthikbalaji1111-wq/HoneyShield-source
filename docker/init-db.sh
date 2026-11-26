@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# HoneyShield PostgreSQL bootstrap (HONEY-002). Runs ONCE, on first volume init, from
+# HoneyShield PostgreSQL bootstrap. Runs ONCE, on first volume init, from
 # /docker-entrypoint-initdb.d/ as the image's bootstrap superuser (POSTGRES_USER).
 #
 # Creates the two non-superuser identities and hands the database to the owner:
@@ -10,7 +9,6 @@
 #
 # Passwords come from the environment and are passed to psql as variables (:'var'), so they
 # are quoted by the server and cannot inject SQL. There are NO default passwords.
-# ==============================================================================
 set -euo pipefail
 
 : "${HS_OWNER_DB_PASSWORD:?HS_OWNER_DB_PASSWORD must be set}"

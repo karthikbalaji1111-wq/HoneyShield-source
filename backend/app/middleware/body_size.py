@@ -1,4 +1,4 @@
-"""ASGI middleware to enforce strict request body-size limits (F-010)."""
+"""ASGI middleware to enforce strict request body-size limits."""
 from __future__ import annotations
 
 import json
@@ -47,7 +47,7 @@ class RequestBodySizeMiddleware:
         content_length_header = headers.get("content-length")
         max_allowed = self.max_bytes
 
-        # 1. Fast Content-Length pre-check: reject before consuming any body into memory
+        # Fast Content-Length pre-check: reject before consuming any body into memory
         if content_length_header is not None:
             try:
                 content_length = int(content_length_header)
@@ -58,7 +58,7 @@ class RequestBodySizeMiddleware:
                 await self._send_error_response(send, 400, "Invalid Content-Length header", request_id)
                 return
 
-        # 2. Streaming count wrapper for chunked or missing Content-Length
+        # Streaming count wrapper for chunked or missing Content-Length
         bytes_received = 0
 
         async def bounded_receive() -> Message:

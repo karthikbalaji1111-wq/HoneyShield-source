@@ -1,4 +1,4 @@
-"""Separate the public ingest surface from the operator control plane (HONEY-003/018).
+"""Separate the public ingest surface from the operator control plane.
 
 When both PUBLIC_INGEST_BASE_URL and CONTROL_PLANE_HOSTNAMES are configured:
 

@@ -13,6 +13,7 @@ from app.schemas.detection_event import (
     DetectionEventResponse,
     DetectionEventStatisticsResponse,
 )
+from app.core.attack import techniques_for
 from app.core.redaction import redact, viewer_sees_secrets
 from app.models.enums import EventSeverity
 from app.schemas.error import ErrorResponse
@@ -161,6 +162,7 @@ def _event_view(event, unmasked: bool) -> DetectionEventResponse:
     # Decoy identity helps triage; the secret token value is never part of the response.
     view.decoy_id, view.decoy_type, view.decoy_label = token.decoy_id, token.token_type.value, token.label
     view.project_domain = token.project.domain if token.project else None
+    view.attack = techniques_for(view.decoy_type)
     if not unmasked:
         secret = token.token_value
         view.request_path = redact(view.request_path, secret)

@@ -1,4 +1,4 @@
-"""Durable alerting: destinations and the transactional outbox (HONEY-007)."""
+"""Durable alerting: destinations and the transactional outbox."""
 from __future__ import annotations
 
 import secrets
@@ -18,6 +18,7 @@ class AlertFormat(str, PyEnum):
     SLACK = "SLACK"              # {"text": ...}; also accepted by Teams/Mattermost incoming webhooks
     EMAIL = "EMAIL"              # mailto:a@b,c@d through the operator's SMTP relay
     SYSLOG_CEF = "SYSLOG_CEF"    # syslog+tls://siem:6514, RFC 5424/5425 with an ArcSight CEF body
+    PAGERDUTY = "PAGERDUTY"      # pagerduty://<routing key>, Events API v2 (pagerduty+eu:// for the EU region)
 
 
 class OutboxStatus(str, PyEnum):

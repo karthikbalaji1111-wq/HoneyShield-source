@@ -250,8 +250,9 @@ def generate_honey_token(
     _: TenantAdminRequired,
 ) -> HoneyTokenResponse:
     """Generate and serialize a honey token. Requires TENANT_ADMIN or above."""
-    return service.generate_token(
+    from app.services.bait_files import with_files
+    return with_files(service.generate_token(
         project_domain=domain,
         token_type=payload.token_type,
         params=payload.generator_params,
-    )
+    ))

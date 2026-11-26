@@ -1,4 +1,4 @@
-"""HONEY-015: TENANT_USER viewers never see live honey-token values."""
+"""TENANT_USER viewers never see live honey-token values."""
 from __future__ import annotations
 
 from app.core.redaction import mask

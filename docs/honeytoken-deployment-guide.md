@@ -12,6 +12,9 @@ recording triggers as evidence.
 | PIXEL | `<img src=https://<ingest>/px/<value>.gif>` for decoy documents/emails | HoneyShield | HIGH | mail clients/proxies that pre-fetch images (Apple Mail Privacy Protection, Gmail proxy), document indexers |
 | FORM_FIELD | empty off-screen `<input>` honeypot | your form handler via the hook (CUSTOMER_HOOK) | MEDIUM | password managers / browser autofill occasionally filling hidden fields |
 | API_KEY | decoy credential (generic / Stripe-like / OpenAI-like format) | your auth middleware via the hook | CRITICAL | internal scanners or CI jobs that try every key they find |
+| DNS | host name `<value>.<DNS_TOKEN_ZONE>` ([docs/dns-tokens.md](dns-tokens.md)) | HoneyShield's name server (PUBLIC_INGEST) | HIGH | security products and mail filters that resolve names they find |
+| DOCUMENT | Word file that loads `https://<ingest>/px/<value>.gif` as a linked picture ([docs/document-decoys.md](document-decoys.md)) | HoneyShield (PUBLIC_INGEST) | HIGH | document indexers or DLP scanners that render files they find; the owner opening it by mistake |
+| AWS_KEY | real AWS access key with a deny-all policy ([docs/cloud-canaries.md](cloud-canaries.md)) | AWS CloudTrail, read by the cloud-canary worker (CLOUD_AUDIT) | CRITICAL | AWS's own leaked-key scanning attaching its quarantine policy (not a use of the key) |
 
 ## Placement
 
@@ -33,11 +36,41 @@ as you normally would for bots.
 Add `hook.check_api_key(...)` to your authentication middleware. Do **not** plant real keys, and
 remember that use against third-party APIs cannot be detected.
 
+**DNS** — config files (`DB_HOST=`), SSH configs, backup and deploy scripts, internal docs. No code
+is needed where it is planted. Put a tag in front (`$(hostname).<name>`) to learn which copy fired.
+
+**AWS_KEY** — `~/.aws/credentials` on admin workstations, CI variables, `.env` files, old branches.
+It is a real key, so it is detected wherever it is tried; it can do nothing.
+
+**DOCUMENT** — file shares, home folders, backup archives, mailboxes: anywhere an intruder browses
+for something worth reading. Plant the file directly; a copy that arrives as an email attachment
+or download opens in Protected View, which holds the picture back until editing is enabled.
+
+## Bait files
+
+Administrators can download a decoy already inside the file intruders look for (console:
+*Artifact → Download as*, or `GET /api/v1/honey-tokens/{decoy_id}/files/{kind}`):
+
+| Decoy | Files (`kind`) |
+|---|---|
+| AWS_KEY | `aws-credentials` (`~/.aws/credentials` format), `env` |
+| DNS | `kubeconfig`, `ssh-config`, `env` |
+| API_KEY | `env` |
+| DOCUMENT | `docx` |
+
+The DNS files put a different label in front of the host name (`k8s-prod.`, `bastion.`, `db.`), and
+DNS hits record it, so an alert says which file was used. Everything around the decoy (database
+passwords, secret keys, a cluster token) is filler that is valid nowhere and the same on every
+download. Each download is audited (`HONEY_TOKEN_FILE_DOWNLOADED`); viewers cannot download.
+
 ## Triage of an event
 
 1. **Source**: PUBLIC_INGEST (HoneyShield saw it), CUSTOMER_HOOK (your integration reported it;
-   IP/time asserted by you), MANUAL (entered by a named user with a reason), LEGACY_UNVERIFIED.
-2. **Severity** comes from the decoy type, never from the caller.
+   IP/time asserted by you), CLOUD_AUDIT (AWS CloudTrail recorded it; IP/time as AWS saw them),
+   MANUAL (entered by a named user with a reason), LEGACY_UNVERIFIED.
+2. **Severity** comes from the decoy type, never from the caller. So do the **ATT&CK**
+   techniques shown on the event (for example T1552.001 and T1078.004 for an AWS key):
+   the technique such a hit most likely means, a starting point rather than a verdict.
 3. **IP** is the first untrusted hop as seen by HoneyShield's proxy (spoofed X-Forwarded-For is
    ignored). Check the threat timeline for the IP (`Overview → Top attackers`).
 4. **User agent / path** are attacker-controlled; treat as indicators, not facts.

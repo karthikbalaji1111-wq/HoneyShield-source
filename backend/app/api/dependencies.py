@@ -253,7 +253,6 @@ def get_optional_user(
 OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
 
 
-
 def get_audit_log_service(session: SessionDependency, current_user: OptionalUser = None) -> AuditLogService:
     """Provide an audit-log service using the request-scoped session."""
     return AuditLogService(session=session, current_user=current_user, audit_repo=AuditLogRepository(session))
@@ -312,7 +311,6 @@ def get_threat_intelligence_service(
         current_user=current_user,
         event_repo=DetectionEventRepository(session),
     )
-
 
 
 from app.services.user_service import UserService

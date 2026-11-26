@@ -103,7 +103,7 @@ def require_active_identity(user) -> None:
 def resolve_access_token(token, session, allow_mfa_pending: bool = False, with_amr: bool = False):
     """Resolve a bearer token to its live user.
 
-    MFA (HONEY-029): a password-only session of an MFA-enabled account is refused (401; log in
+    MFA: a password-only session of an MFA-enabled account is refused (401; log in
     again with a code). A password-only session of a role that must use MFA but has not enrolled
     is "MFA pending": it may only reach the enrolment endpoints (``allow_mfa_pending``); anything
     else is 403.

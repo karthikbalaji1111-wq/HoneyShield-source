@@ -16,10 +16,6 @@ import pytest
 from tests.conftest import auth_headers
 
 
-# ---------------------------------------------------------------------------
-# Tenant slug enumeration
-# ---------------------------------------------------------------------------
-
 class TestTenantSlugIsolation:
     def test_tenant_a_cannot_read_tenant_b(self, client, admin_a, tenant_b):
         """Cross-tenant read must return 404, not 403."""
@@ -50,10 +46,6 @@ class TestTenantSlugIsolation:
         assert "tenant-a" in slugs
         assert "tenant-b" not in slugs
 
-
-# ---------------------------------------------------------------------------
-# Project domain enumeration
-# ---------------------------------------------------------------------------
 
 class TestProjectIsolation:
     def test_tenant_a_cannot_read_tenant_b_project(self, client, admin_a, project_b):
@@ -98,10 +90,6 @@ class TestProjectIsolation:
         # Cross-tenant create must be denied — 404 (tenant masked) not 200
         assert resp.status_code == 404
 
-
-# ---------------------------------------------------------------------------
-# Honey token enumeration
-# ---------------------------------------------------------------------------
 
 class TestHoneyTokenIsolation:
     def test_tenant_a_cannot_list_tenant_b_tokens(self, client, admin_a, token_a, token_b):
@@ -174,11 +162,6 @@ class TestHoneyTokenIsolation:
         assert resp.status_code == 404
 
 
-
-# ---------------------------------------------------------------------------
-# Detection event isolation
-# ---------------------------------------------------------------------------
-
 class TestDetectionEventIsolation:
     def test_tenant_a_cannot_record_event_for_tenant_b_token(self, client, admin_a, token_b):
         """Cross-tenant administrative event recording must be denied with 404."""
@@ -248,7 +231,6 @@ class TestDetectionEventIsolation:
 
     def test_statistics_and_count_today_scope_to_own_tenant(self, client, admin_a, admin_b, token_a, token_b, system_admin):
         """Statistics and today counts must strictly count only the authenticated tenant's events."""
-        # Create 2 events for Tenant A and 1 event for Tenant B
         client.post(
             "/api/v1/detection-events",
             json={"token_value": token_a.token_value, "ip_address": "10.1.1.1", "request_path": "/1", "http_method": "GET", "severity": "LOW", "reason": "Analyst reproduction for regression test"},

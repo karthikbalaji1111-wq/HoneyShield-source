@@ -61,7 +61,7 @@ class DetectionEventCreate(SchemaBase):
     @field_validator("ip_address")
     @classmethod
     def validate_ip_address(cls, value: str) -> str:
-        """Validate that ip_address is a valid IPv4 or IPv6 format (F-028)."""
+        """Validate that ip_address is a valid IPv4 or IPv6 format."""
         from app.core.ip_trust import normalize_ip
         try:
             return normalize_ip(value)
@@ -71,9 +71,18 @@ class DetectionEventCreate(SchemaBase):
     @field_validator("headers")
     @classmethod
     def validate_and_sanitize_headers(cls, value: dict[str, Any] | None) -> dict[str, str] | None:
-        """Sanitize, filter, and bound request headers before persistence (F-013)."""
+        """Sanitize, filter, and bound request headers before persistence."""
         from app.core.header_security import sanitize_forensic_headers
         return sanitize_forensic_headers(value)
+
+
+class AttackTechnique(SchemaBase):
+    """A MITRE ATT&CK technique."""
+
+    id: str = Field(description="Technique id, for example T1552.001.")
+    name: str
+    tactics: list[str]
+    url: str
 
 
 class DetectionEventResponse(SchemaBase):
@@ -97,9 +106,11 @@ class DetectionEventResponse(SchemaBase):
     triggered_at: datetime = Field(description="Time at which the event was triggered.")
     created_at: datetime = Field(description="Event persistence timestamp.")
     decoy_id: str | None = Field(default=None, description="Public identifier of the triggered decoy (never its secret value).")
-    decoy_type: str | None = Field(default=None, description="Decoy type: URL, LINK, PIXEL, FORM_FIELD or API_KEY.")
+    decoy_type: str | None = Field(default=None, description="Decoy type: URL, LINK, PIXEL, DOCUMENT, FORM_FIELD, API_KEY, DNS or AWS_KEY.")
     decoy_label: str | None = Field(default=None, description="Operator-given label of the decoy.")
     project_domain: str | None = Field(default=None, description="Domain of the project the decoy belongs to.")
+    attack: list[AttackTechnique] = Field(default_factory=list, description=(
+        "MITRE ATT&CK techniques this kind of decoy hit most likely points to (app/core/attack.py)."))
 
 
 class DetectionEventStatisticsResponse(SchemaBase):

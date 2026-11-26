@@ -1,4 +1,4 @@
-"""Focused security tests for CORS Policy (Finding F-014 / Phase 11).
+"""CORS policy.
 
 Covers:
 - Configuration validation (origin parsing, normalization, rejection of wildcards, paths, schemes)
@@ -58,11 +58,6 @@ def cors_client(client: TestClient):
         yield client
     finally:
         cors_mw.allow_origins = original_origins
-
-
-# ===========================================================================
-# 1. Configuration Validation Tests
-# ===========================================================================
 
 
 class TestCORSConfigurationValidation:
@@ -218,11 +213,6 @@ class TestCORSConfigurationValidation:
             Settings(jwt_secret_key="a" * 32, cors_max_age=100000)
 
 
-# ===========================================================================
-# 2. Preflight (OPTIONS) Tests
-# ===========================================================================
-
-
 class TestCORSPreflightRequests:
     """Validate CORS preflight OPTIONS requests across trusted and untrusted origins."""
 
@@ -329,11 +319,6 @@ class TestCORSPreflightRequests:
             assert resp.status_code == 200
 
 
-# ===========================================================================
-# 3. Simple & Actual Request Tests
-# ===========================================================================
-
-
 class TestCORSSimpleAndActualRequests:
     """Validate CORS behavior on actual HTTP operations (GET, POST, PUT, DELETE)."""
 
@@ -377,11 +362,6 @@ class TestCORSSimpleAndActualRequests:
         resp = cors_client.get("/health", headers={"Origin": "https://app.honeyshield.test"})
         assert resp.status_code == 200
         assert "access-control-allow-credentials" not in resp.headers
-
-
-# ===========================================================================
-# 4. Error Responses Under CORS
-# ===========================================================================
 
 
 class TestCORSErrorResponses:
@@ -461,11 +441,6 @@ class TestCORSErrorResponses:
         assert "access-control-allow-origin" not in resp.headers
 
 
-# ===========================================================================
-# 5. Public HoneyToken Ingestion Under CORS
-# ===========================================================================
-
-
 class TestPublicIngestionCORS:
     """Ensure HoneyToken ingestion semantics remain functional under CORS."""
 
@@ -506,11 +481,6 @@ class TestPublicIngestionCORS:
         assert resp.status_code == 200
         assert resp.headers.get("content-type") == "image/gif"
         assert "access-control-allow-origin" not in resp.headers
-
-
-# ===========================================================================
-# 6. Default Deny Behavior
-# ===========================================================================
 
 
 class TestDefaultDenyCORS:

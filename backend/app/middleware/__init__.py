@@ -20,10 +20,10 @@ def register_middlewares(app: FastAPI) -> None:
     Wrapping Order (Outermost to Innermost):
     1. RequestIDMiddleware: Assigns / extracts X-Request-ID header and logging token.
     1b. HostRoutingMiddleware: ingest host serves ingest routes only; control plane the rest.
-    2. SecurityHeadersMiddleware: Enforces centralized HTTP response security headers (F-015).
-    3. CORSMiddleware: Handles cross-origin requests, preflight OPTIONS, and CORS headers (F-014).
-    4. RequestBodySizeMiddleware: Rejects oversized bodies before processing (F-010).
-    5. ApiRateLimitMiddleware: Bounded admission control for API traffic (F-011).
+    2. SecurityHeadersMiddleware: Enforces centralized HTTP response security headers.
+    3. CORSMiddleware: Handles cross-origin requests, preflight OPTIONS, and CORS headers.
+    4. RequestBodySizeMiddleware: Rejects oversized bodies before processing.
+    5. ApiRateLimitMiddleware: Bounded admission control for API traffic.
     6. RequestTimingMiddleware: Computes execution latency and appends X-Process-Time-Ms.
     7. GlobalExceptionMiddleware: Catch-all fallback for uncaught internal server errors.
     8. DecoyPathMiddleware: maps DECOY_*_PATH prefixes onto the ingest routes.

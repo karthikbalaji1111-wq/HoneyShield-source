@@ -40,6 +40,8 @@ seccompProfile: { type: RuntimeDefault }
 - { name: DECOY_COLLECT_PATH, value: {{ .Values.decoyPaths.collect | quote }} }
 - { name: DECOY_LEGACY_PATHS, value: {{ .Values.decoyPaths.legacy | quote }} }
 - { name: CONTROL_PLANE_ALLOWED_CIDRS, value: {{ .Values.controlAllowCidrs | quote }} }
+- { name: DNS_TOKEN_ZONE, value: {{ ternary .Values.dnsDecoys.zone "" .Values.dnsDecoys.enabled | quote }} }
+- { name: AWS_CANARY_ENABLED, value: {{ .Values.cloudCanary.enabled | quote }} }
 - name: POSTGRES_PASSWORD
   valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: POSTGRES_PASSWORD } }
 - name: JWT_SECRET_KEY

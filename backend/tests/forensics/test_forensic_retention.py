@@ -37,10 +37,6 @@ from app.services.project import ProjectService
 from tests.conftest import auth_headers
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 @pytest.fixture()
 def sample_detection_event(db_session: Session, token_a: HoneyToken) -> DetectionEvent:
     """Create a sample DetectionEvent for token_a."""
@@ -57,10 +53,6 @@ def sample_detection_event(db_session: Session, token_a: HoneyToken) -> Detectio
     db_session.flush()
     return event
 
-
-# ---------------------------------------------------------------------------
-# Scenario 1: Project Deletion Preserves DetectionEvents
-# ---------------------------------------------------------------------------
 
 def test_project_deletion_preserves_detection_events(
     db_session: Session,
@@ -85,33 +77,32 @@ def test_project_deletion_preserves_detection_events(
     event_id = sample_detection_event.id
     token_id = token_a.id
 
-    # Execute project deletion
     project_service.delete_project(project_a.domain)
 
-    # 1. Project must be marked inactive (soft-deleted), not physically removed
+    # Project must be marked inactive (soft-deleted), not physically removed
     db_session.expire_all()
     reloaded_project = project_repo.get_by_id(project_a.id)
     assert reloaded_project is not None
     assert reloaded_project.is_active is False
 
-    # 2. Associated token must be marked inactive
+    # Associated token must be marked inactive
     token_repo = HoneyTokenRepository(db_session)
     reloaded_token = token_repo.get_by_id(token_id)
     assert reloaded_token is not None
     assert reloaded_token.is_active is False
 
-    # 3. DetectionEvent MUST still exist in database
+    # DetectionEvent MUST still exist in database
     event_repo = DetectionEventRepository(db_session)
     reloaded_event = event_repo.get_by_id(event_id)
     assert reloaded_event is not None
     assert reloaded_event.id == event_id
     assert reloaded_event.honey_token_id == token_id
 
-    # 4. Tenant-scoped listing must still return the event
+    # Tenant-scoped listing must still return the event
     tenant_events = event_repo.list_recent(tenant_id=tenant_a.id)
     assert any(e.id == event_id for e in tenant_events)
 
-    # 5. Audit log must record the deletion with actor attribution
+    # Audit log must record the deletion with actor attribution
     audit_logs = db_session.query(AuditLog).filter_by(
         event_type="PROJECT_DELETED",
         target_entity="project",
@@ -120,10 +111,6 @@ def test_project_deletion_preserves_detection_events(
     assert len(audit_logs) >= 1
     assert audit_logs[0].actor_user_id == admin_a.id
 
-
-# ---------------------------------------------------------------------------
-# Scenario 2: HoneyToken Revocation Preserves DetectionEvents
-# ---------------------------------------------------------------------------
 
 def test_honey_token_revocation_preserves_detection_events(
     db_session: Session,
@@ -146,22 +133,21 @@ def test_honey_token_revocation_preserves_detection_events(
 
     event_id = sample_detection_event.id
 
-    # Revoke the token
     token_service.revoke_token(token_a.token_value)
 
-    # 1. Token is inactive
+    # Token is inactive
     db_session.expire_all()
     reloaded_token = token_repo.get_by_id(token_a.id)
     assert reloaded_token is not None
     assert reloaded_token.is_active is False
 
-    # 2. Historical DetectionEvent is preserved
+    # Historical DetectionEvent is preserved
     event_repo = DetectionEventRepository(db_session)
     reloaded_event = event_repo.get_by_id(event_id)
     assert reloaded_event is not None
     assert reloaded_event.id == event_id
 
-    # 3. Audit log contains actor attribution
+    # Audit log contains actor attribution
     audit_logs = db_session.query(AuditLog).filter_by(
         event_type="HONEY_TOKEN_REVOKED",
         target_id=str(token_a.id),
@@ -169,10 +155,6 @@ def test_honey_token_revocation_preserves_detection_events(
     assert len(audit_logs) >= 1
     assert audit_logs[0].actor_user_id == admin_a.id
 
-
-# ---------------------------------------------------------------------------
-# Scenario 3: HoneyToken Rotation Preserves DetectionEvents
-# ---------------------------------------------------------------------------
 
 def test_honey_token_rotation_preserves_detection_events(
     db_session: Session,
@@ -197,30 +179,26 @@ def test_honey_token_rotation_preserves_detection_events(
     old_token_val = token_a.token_value
     event_id = sample_detection_event.id
 
-    # HONEY-012: tenant admins rotate to a server-generated value.
+    # Tenant admins rotate to a server-generated value.
     new_token = token_service.rotate_token(old_token_val)
     assert new_token.token_value != old_token_val
 
-    # 1. Old token deactivated, new token active
+    # Old token deactivated, new token active
     db_session.expire_all()
     old_token = token_repo.get_by_id(token_a.id)
     assert old_token.is_active is False
     assert new_token.is_active is True
 
-    # 2. DetectionEvent remains bound to old token and intact
+    # DetectionEvent remains bound to old token and intact
     event_repo = DetectionEventRepository(db_session)
     reloaded_event = event_repo.get_by_id(event_id)
     assert reloaded_event is not None
     assert reloaded_event.honey_token_id == token_a.id
 
-    # 3. Preserved event is still queryable under tenant
+    # Preserved event is still queryable under tenant
     tenant_events = event_repo.list_recent(tenant_id=tenant_a.id)
     assert any(e.id == event_id for e in tenant_events)
 
-
-# ---------------------------------------------------------------------------
-# Scenario 4: DetectionEvent Cannot Be Modified (ORM Immutability)
-# ---------------------------------------------------------------------------
 
 def test_detection_event_cannot_be_modified(
     db_session: Session,
@@ -244,10 +222,6 @@ def test_detection_event_cannot_be_modified(
     assert original.ip_address == "198.51.100.42"
     assert original.severity == EventSeverity.HIGH
 
-
-# ---------------------------------------------------------------------------
-# Scenario 5: DetectionEvent Cannot Be Deleted (ORM & Repo Immutability)
-# ---------------------------------------------------------------------------
 
 def test_detection_event_cannot_be_deleted_via_session(
     db_session: Session,
@@ -276,10 +250,6 @@ def test_detection_event_cannot_be_deleted_via_repository(
     with pytest.raises(ForbiddenError, match="cannot be deleted"):
         event_repo.delete(sample_detection_event.id)
 
-
-# ---------------------------------------------------------------------------
-# Scenario 6: AuditLog Cannot Be Modified or Deleted
-# ---------------------------------------------------------------------------
 
 def test_audit_log_cannot_be_modified(db_session: Session) -> None:
     """AuditLog records are immutable; in-place edits must raise ForbiddenError."""
@@ -333,10 +303,6 @@ def test_audit_log_cannot_be_deleted_via_repository(db_session: Session) -> None
         audit_repo.delete(audit_log.id)
 
 
-# ---------------------------------------------------------------------------
-# Scenario 7: Administrative Actions Correctly Attribute actor_user_id
-# ---------------------------------------------------------------------------
-
 def test_administrative_actions_attribute_actor_user_id(
     client: TestClient,
     admin_a: User,
@@ -346,7 +312,6 @@ def test_administrative_actions_attribute_actor_user_id(
     """Administrative API actions must log AuditLog entries with actor_user_id set."""
     headers = auth_headers(admin_a)
 
-    # 1. Create a project via API
     resp = client.post(
         "/api/v1/projects",
         json={"name": "Audit Test Project", "domain": "audit-test.com", "tenant_slug": tenant_a.slug},
@@ -355,7 +320,7 @@ def test_administrative_actions_attribute_actor_user_id(
     assert resp.status_code == 201
     project_id = resp.json()["id"]
 
-    # 2. Verify AuditLog for PROJECT_CREATED has actor_user_id
+    # Verify AuditLog for PROJECT_CREATED has actor_user_id
     db_session.expire_all()
     created_log = db_session.query(AuditLog).filter_by(
         event_type="PROJECT_CREATED",
@@ -365,7 +330,6 @@ def test_administrative_actions_attribute_actor_user_id(
     assert created_log.actor_user_id == admin_a.id
     assert created_log.tenant_id == tenant_a.id
 
-    # 3. Generate a HoneyToken via API
     token_resp = client.post(
         f"/api/v1/projects/audit-test.com/honey-tokens/generate",
         json={"token_type": "API_KEY", "generator_params": {"key_prefix": "audit_"}},
@@ -382,7 +346,6 @@ def test_administrative_actions_attribute_actor_user_id(
     assert gen_log is not None
     assert gen_log.actor_user_id == admin_a.id
 
-    # 4. Delete the project via API
     del_resp = client.delete(f"/api/v1/projects/audit-test.com", headers=headers)
     assert del_resp.status_code == 204
 
@@ -395,20 +358,14 @@ def test_administrative_actions_attribute_actor_user_id(
     assert del_log.actor_user_id == admin_a.id
 
 
-# ---------------------------------------------------------------------------
-# Scenario 8: Public Ingestion Does Not Fabricate Authenticated Actor
-# ---------------------------------------------------------------------------
-
 def test_public_ingestion_does_not_fabricate_actor(
     client: TestClient,
     token_a: HoneyToken,
     db_session: Session,
 ) -> None:
     """Public ingestion creates DetectionEvent without fabricating user authentication."""
-    # Clear any preexisting detection events
     initial_event_count = db_session.query(DetectionEvent).filter_by(honey_token_id=token_a.id).count()
 
-    # Trigger public URL token ingestion (unauthenticated)
     resp = client.get(f"/t/{token_a.token_value}", headers={"User-Agent": "Scanner/2.0"})
     assert resp.status_code == 204
 
@@ -425,10 +382,6 @@ def test_public_ingestion_does_not_fabricate_actor(
     assert len(fabricated_logs) == 0
 
 
-# ---------------------------------------------------------------------------
-# Scenario 9: Tenant Isolation Intact for Preserved Forensic Records
-# ---------------------------------------------------------------------------
-
 def test_tenant_isolation_intact_for_preserved_records(
     db_session: Session,
     project_a: Project,
@@ -441,7 +394,6 @@ def test_tenant_isolation_intact_for_preserved_records(
     tenant_b: Tenant,
 ) -> None:
     """Soft-deleted/preserved events for Tenant A must never appear in Tenant B queries."""
-    # Create detection events for both tenants
     event_a = DetectionEvent(source=EventSource.PUBLIC_INGEST,
         honey_token_id=token_a.id,
         ip_address="198.51.100.10",
@@ -486,10 +438,6 @@ def test_tenant_isolation_intact_for_preserved_records(
     assert event_a.id in tenant_a_ids
     assert event_b.id not in tenant_a_ids
 
-
-# ---------------------------------------------------------------------------
-# Scenario 10: SYSTEM_ADMIN Forensic Visibility Is Global
-# ---------------------------------------------------------------------------
 
 def test_system_admin_forensic_visibility_is_global(
     db_session: Session,

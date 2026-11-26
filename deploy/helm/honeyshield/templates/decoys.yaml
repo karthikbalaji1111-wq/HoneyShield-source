@@ -1,0 +1,121 @@
+{{- if .Values.dnsDecoys.enabled }}
+{{- if not .Values.dnsDecoys.zone }}{{ fail "dnsDecoys.zone is required when dnsDecoys.enabled is true" }}{{ end }}
+# Authoritative name server for DNS decoys (app/workers/dns_listener.py, docs/dns-tokens.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-dns
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "dns") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "dns") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: dns
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["python", "-m", "app.workers.dns_listener"]
+          ports:
+            - { name: dns-udp, containerPort: 5353, protocol: UDP }
+            - { name: dns-tcp, containerPort: 5353, protocol: TCP }
+          env:
+            - { name: DNS_TOKEN_ZONE, value: {{ .Values.dnsDecoys.zone | quote }} }
+            - { name: DNS_ANSWER_IPV4, value: {{ .Values.dnsDecoys.answerIpv4 | quote }} }
+            - { name: DNS_ANSWER_IPV6, value: {{ .Values.dnsDecoys.answerIpv6 | quote }} }
+            - { name: DNS_NAMESERVERS, value: {{ .Values.dnsDecoys.nameservers | quote }} }
+            - { name: DNS_TTL, value: {{ .Values.dnsDecoys.ttl | quote }} }
+            - { name: DNS_LISTEN_PORT, value: "5353" }
+            - { name: HS_DNS_SPOOL, value: /var/spool/honeyshield-dns/hits.jsonl }
+            - { name: HS_DNS_HITS_URL, value: "http://{{ include "hs.name" . }}-backend.{{ .Release.Namespace }}.svc.cluster.local:8000/internal/v1/dns-hits" }
+            - name: INTEGRATION_SIGNING_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: INTEGRATION_SIGNING_KEY } }
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.dnsDecoys.resources | nindent 12 }}
+          readinessProbe:
+            exec: { command: ["python", "-m", "app.workers.dns_listener", "--check"] }
+            periodSeconds: 15
+          livenessProbe:
+            exec: { command: ["python", "-m", "app.workers.dns_listener", "--check"] }
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: spool, mountPath: /var/spool/honeyshield-dns }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        # Hits waiting for the backend. An emptyDir survives container restarts, not pod deletion.
+        - { name: spool, emptyDir: { sizeLimit: {{ .Values.dnsDecoys.spoolSizeLimit }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hs.name" . }}-dns
+  labels: {{- include "hs.labels" . | nindent 4 }}
+  {{- with .Values.dnsDecoys.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.dnsDecoys.service.type }}
+  {{- if eq .Values.dnsDecoys.service.type "LoadBalancer" }}
+  # Keep the resolver's address: it is the evidence of a DNS hit.
+  externalTrafficPolicy: Local
+  {{- end }}
+  selector: {{- include "hs.selector" (dict "root" . "component" "dns") | nindent 4 }}
+  ports:
+    - { name: dns-udp, port: 53, targetPort: dns-udp, protocol: UDP }
+    - { name: dns-tcp, port: 53, targetPort: dns-tcp, protocol: TCP }
+{{- end }}
+{{- if .Values.cloudCanary.enabled }}
+{{- if not .Values.cloudCanary.accessKeyId }}{{ fail "cloudCanary.accessKeyId is required when cloudCanary.enabled is true" }}{{ end }}
+---
+# Creates AWS key decoys and reads CloudTrail for their use (app/workers/cloud_canary.py).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hs.name" . }}-cloud-canary
+  labels: {{- include "hs.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "hs.selector" (dict "root" . "component" "cloud-canary") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "hs.selector" (dict "root" . "component" "cloud-canary") | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 25
+      containers:
+        - name: cloud-canary
+          image: {{ include "hs.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.backend.pullPolicy }}
+          command: ["python", "-m", "app.workers.cloud_canary"]
+          env:
+            {{- include "hs.appEnv" . | nindent 12 }}
+            - { name: AWS_CANARY_ACCESS_KEY_ID, value: {{ .Values.cloudCanary.accessKeyId | quote }} }
+            - { name: AWS_CANARY_IAM_PATH, value: {{ .Values.cloudCanary.iamPath | quote }} }
+            - { name: AWS_CANARY_REGIONS, value: {{ .Values.cloudCanary.regions | quote }} }
+            - { name: AWS_CANARY_PERMISSIONS_BOUNDARY, value: {{ .Values.cloudCanary.permissionsBoundary | quote }} }
+            - { name: AWS_CANARY_POLL_SECONDS, value: {{ .Values.cloudCanary.pollSeconds | quote }} }
+            - name: AWS_CANARY_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.secrets.existingSecret }}, key: AWS_CANARY_SECRET_ACCESS_KEY } }
+          securityContext: {{- include "hs.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.cloudCanary.resources | nindent 12 }}
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]
+      volumes: [{ name: tmp, emptyDir: {} }]
+{{- end }}

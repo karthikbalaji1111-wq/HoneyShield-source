@@ -6,7 +6,7 @@ Two layers
   so bursts straddling a window boundary cannot get twice the limit; ``increment``/``peek``
   remain plain per-window counters (evidence caps).
 * ``SharedLimiter``: the same interface backed by Redis when REDIS_URL is set, so every API
-  replica counts against one budget (HONEY-026). Windows are keyed by wall-clock window number
+  replica counts against one budget. Windows are keyed by wall-clock window number
   (the same sliding estimate, current + previous key); each check is one atomic Lua call with a
   short timeout. If Redis is unavailable the
   limiter falls back to its process-local window (``app.core.shared_state`` breaker): limits

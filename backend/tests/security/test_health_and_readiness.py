@@ -1,4 +1,4 @@
-"""Focused security tests for Health, Readiness & Deployment Probes (Phase 9).
+"""Health, readiness and deployment probes.
 
 Covers:
 - Liveness contract (independent of database availability)
@@ -30,7 +30,7 @@ def _reset_limiters():
 
 
 class TestLivenessContract:
-    """Test process liveness contract across all canonical endpoints."""
+    """Process liveness contract across all canonical endpoints."""
 
     def test_root_health_returns_200_without_auth(self, client: TestClient):
         resp = client.get("/health")
@@ -63,7 +63,7 @@ class TestLivenessContract:
 
 
 class TestReadinessContract:
-    """Test readiness contract reflecting database dependencies and migrations."""
+    """Readiness contract reflecting database dependencies and migrations."""
 
     def test_readiness_returns_200_when_database_and_migrations_ready(self, client: TestClient):
         """When database is healthy and alembic migration head matches, returns 200 ready."""
@@ -249,7 +249,7 @@ class TestReadinessContract:
 
 
 class TestConnectionPoolSafety:
-    """Test that readiness checks do not leak connections or exhaust pools."""
+    """Readiness checks do not leak connections or exhaust pools."""
 
     def test_readiness_releases_database_session(self, client: TestClient):
         close_called = []

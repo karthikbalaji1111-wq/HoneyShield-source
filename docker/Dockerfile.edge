@@ -1,6 +1,6 @@
 # HoneyShield edge: nginx with the two-vhost configuration and the operator console baked in.
 # Used by Compose and by the Helm chart (deploy/helm/honeyshield); only TLS certificates are mounted.
-FROM nginx:1.30.7-alpine@sha256:bef154735288bc38d99fac41ae63730684bcc661503673a04a0f9bc526ba8598
+FROM nginx:1.30.7-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
 
 # OS security fixes; drop optional modules HoneyShield never loads (XSLT, njs, image filter, GeoIP),
 # which also removes libxml2/libxslt and their CVEs from the image. Rebuild regularly.

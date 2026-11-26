@@ -139,6 +139,9 @@ def cef_message(data: dict[str, Any]) -> str:
         ("cs4Label", "detectionSource"), ("cs4", data.get("source")),
         ("cs5Label", "tokenType"), ("cs5", data.get("token_type")),
     ]
+    techniques = ",".join(t["id"] for t in data.get("attack") or [])
+    if techniques:
+        ext += [("cs6Label", "attackTechniques"), ("cs6", techniques)]
     extension = " ".join(f"{k}={_cef_ext(v)}" for k, v in ext if v not in (None, ""))
     header = "|".join(_cef_header(x) for x in (
         "CEF:0", "HoneyShield", "HoneyShield", "1", f"honeytoken.{data['token_type']}",
@@ -228,6 +231,7 @@ def email_body(data: dict[str, Any]) -> str:
         f"Request:         {data.get('http_method') or '-'} {data.get('request_path') or '-'}",
         f"Detection path:  {data.get('source')}",
         f"Triggered at:    {data.get('triggered_at')}",
+        f"ATT&CK:          {', '.join(t['id'] + ' ' + t['name'] for t in data.get('attack') or []) or '-'}",
         f"Event id:        {data.get('event_id')}",
         f"Delivery id:     {data.get('delivery_id')}",
         "",

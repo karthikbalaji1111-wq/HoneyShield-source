@@ -1,4 +1,3 @@
-
 """Deployment contracts exercised independently of Docker availability."""
 from __future__ import annotations
 
@@ -191,7 +190,7 @@ def test_mfa_required_roles_default_to_admins_in_production_only():
 
 
 def test_backend_image_disables_uvicorn_proxy_header_rewriting():
-    """Only the app's TRUSTED_PROXIES walk may interpret X-Forwarded-For (HONEY-005)."""
+    """Only the app's TRUSTED_PROXIES walk may interpret X-Forwarded-For."""
     import json
     import pathlib
     dockerfile = pathlib.Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.backend"

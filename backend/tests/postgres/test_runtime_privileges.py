@@ -1,4 +1,4 @@
-"""HONEY-002 acceptance: the runtime role cannot rewrite, delete or unprotect evidence.
+"""The runtime role cannot rewrite, delete or unprotect evidence.
 
 Every statement here runs on a real PostgreSQL connection authenticated as the role
 under test. ORM hooks are not involved.

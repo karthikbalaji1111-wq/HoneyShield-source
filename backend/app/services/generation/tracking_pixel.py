@@ -21,7 +21,7 @@ PIXEL_PLACEMENT_WARNING = (
 class TrackingPixelGenerator(BaseGenerator):
     """Generates tracking pixels for decoy documents and decoy emails.
 
-    No web-page snippet is produced on purpose (HONEY-004): CSS-hidden images are
+    No web-page snippet is produced on purpose: CSS-hidden images are
     still fetched by browsers, so a page-embedded pixel triggers for every visitor.
     """
 
@@ -31,6 +31,7 @@ class TrackingPixelGenerator(BaseGenerator):
         params: dict[str, Any],
         ingest_base_url: str | None = None,
         paths: Mapping[str, str] | None = None,
+        dns_zone: str | None = None,
     ) -> GeneratedTokenData:
         # High-entropy random hex token identifying the pixel
         token_value = secrets.token_hex(16)

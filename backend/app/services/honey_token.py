@@ -23,12 +23,22 @@ from app.services.generation.registry import GENERATOR_REGISTRY
 from sqlalchemy.exc import IntegrityError
 
 
-
 def _decoy_paths() -> dict[str, str]:
     from app.core.config import get_settings
     settings = get_settings()
     return {"link": settings.decoy_link_path, "pixel": settings.decoy_pixel_path,
             "collect": settings.decoy_collect_path}
+
+def _require_type_configured(token_type: HoneyTokenType, settings) -> None:
+    """DNS and cloud decoys only work when the installation runs the service that watches them."""
+    if token_type == HoneyTokenType.DNS and not settings.dns_token_zone:
+        raise ValidationError("DNS decoys are not set up on this installation (DNS_TOKEN_ZONE, docs/dns-tokens.md)")
+    if token_type == HoneyTokenType.DOCUMENT and not settings.public_ingest_base_url:
+        raise ValidationError("Document decoys need PUBLIC_INGEST_BASE_URL (docs/document-decoys.md)")
+    if token_type == HoneyTokenType.AWS_KEY and not settings.aws_canary_enabled:
+        raise ValidationError("AWS key decoys are not set up on this installation "
+                              "(AWS_CANARY_ENABLED, docs/cloud-canaries.md)")
+
 
 class HoneyTokenService(BaseService):
     """Coordinate honey-token lifecycle operations."""
@@ -64,7 +74,7 @@ class HoneyTokenService(BaseService):
     ) -> HoneyToken:
         """Create a unique honey token for an existing project.
 
-        HONEY-012: token values are globally unique (public ingestion resolves them without a
+        Token values are globally unique (public ingestion resolves them without a
         tenant), so letting a tenant choose one would turn the uniqueness check into an oracle
         ("does this value belong to someone's decoy?"). Only SYSTEM_ADMIN may supply a value;
         everyone else gets a generated token and artifact (same as /generate).
@@ -187,13 +197,15 @@ class HoneyTokenService(BaseService):
             tenant_id = project.tenant_id
 
             from app.core.config import get_settings
-            ingest_base_url = get_settings().public_ingest_base_url
+            settings = get_settings()
+            ingest_base_url = settings.public_ingest_base_url
+            _require_type_configured(token_type, settings)
 
             # Try up to 3 times to generate a globally unique token
             for _ in range(3):
                 generated = generator.generate(
                     project_domain, params or {}, ingest_base_url=ingest_base_url,
-                    paths=_decoy_paths(),
+                    paths=_decoy_paths(), dns_zone=settings.dns_token_zone,
                 )
                 
                 # Output validation
@@ -253,6 +265,36 @@ class HoneyTokenService(BaseService):
             except Exception:
                 pass
             raise
+
+    def get_by_decoy_id(self, decoy_id: str) -> HoneyToken:
+        """An active decoy of the caller's tenant by its public id (not found for any other tenant)."""
+        from sqlalchemy import select
+
+        from app.core.auth_exceptions import ForbiddenError
+        token = self.session.scalar(select(HoneyToken).where(HoneyToken.decoy_id == decoy_id))
+        if token is None or not token.is_active:
+            raise HoneyTokenNotFoundError("Decoy not found")
+        try:
+            self._authorize_tenant_access(token.project.tenant_id)
+        except ForbiddenError:
+            raise HoneyTokenNotFoundError("Decoy not found")
+        return token
+
+    def record_file_download(self, token: HoneyToken, kind: str) -> None:
+        """Audit who took a copy of a decoy as a file: that copy is now somewhere to plant."""
+        if self.audit_service:
+            self.audit_service.record_action(
+                event_type="HONEY_TOKEN_FILE_DOWNLOADED",
+                severity="INFO",
+                message=f"Downloaded decoy {token.decoy_id} as '{kind}'",
+                actor_source="api",
+                target_entity="honey_token",
+                target_id=token.id,
+                tenant_id=token.project.tenant_id,
+                project_id=token.project_id,
+                event_metadata={"kind": kind},
+            )
+        self.session.commit()
 
     def revoke_token(self, token_value: str) -> None:
         """Mark an existing honey token as inactive.
@@ -316,11 +358,13 @@ class HoneyTokenService(BaseService):
 
         generator = GENERATOR_REGISTRY.get(old_token.token_type)
         old_meta = old_token.token_metadata or {}
-        params = {k: old_meta[k] for k in ("provider_style", "field_name") if k in old_meta}
+        params = {k: old_meta[k] for k in ("provider_style", "field_name", "profile_name") if k in old_meta}
         for _ in range(3):
+            settings = get_settings()
+            _require_type_configured(old_token.token_type, settings)
             generated = generator.generate(old_token.project.domain, params,
-                                           ingest_base_url=get_settings().public_ingest_base_url,
-                                           paths=_decoy_paths())
+                                           ingest_base_url=settings.public_ingest_base_url,
+                                           paths=_decoy_paths(), dns_zone=settings.dns_token_zone)
             if not self.token_repo.get_by_token(generated.token_value):
                 return generated.token_value, generated.metadata
         raise DuplicateHoneyTokenError("Failed to generate a unique replacement token")

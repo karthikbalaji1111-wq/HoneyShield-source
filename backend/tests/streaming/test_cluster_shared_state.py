@@ -1,4 +1,4 @@
-"""HONEY-026: several API replicas share rate limits and the live stream through Redis.
+"""Several API replicas share rate limits and the live stream through Redis.
 
 Without Redis (unreachable), limiters keep enforcing per-process limits and the stream still
 reaches local clients. With HS_TEST_REDIS_URL, two limiter/broadcaster instances stand in for

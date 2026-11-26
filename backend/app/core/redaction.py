@@ -1,4 +1,4 @@
-"""Masking of honey-token values for viewers who do not deploy decoys (HONEY-015).
+"""Masking of honey-token values for viewers who do not deploy decoys.
 
 A token value is a live secret: anyone who knows it can trigger (or deliberately avoid) the
 decoy. TENANT_USER viewers investigate events but never need the value, so it is masked
@@ -27,6 +27,13 @@ def redact(obj: Any, secret: str, replacement: str | None = None) -> Any:
     if isinstance(obj, list):
         return [redact(v, secret, replacement) for v in obj]
     return obj
+
+
+def token_secrets(token: Any) -> list[str]:
+    """Every value of a decoy a viewer must not see: the value, plus a cloud key's id and secret."""
+    meta = getattr(token, "token_metadata", None) or {}
+    extra = [meta.get("access_key_id"), meta.get("secret_access_key")] if isinstance(meta, dict) else []
+    return [s for s in [token.token_value, *extra] if isinstance(s, str) and s]
 
 
 def viewer_sees_secrets(user: Any) -> bool:

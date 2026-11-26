@@ -1,4 +1,4 @@
-"""Operator MFA lifecycle (HONEY-029): enrolment, second-factor verification, recovery, reset.
+"""Operator MFA lifecycle: enrolment, second-factor verification, recovery, reset.
 
 State lives on ``users``: ``mfa_nonce`` (secret derivation input; set at setup, kept when
 enabled), ``mfa_enabled``, ``mfa_last_step`` (replay guard), ``mfa_recovery_hashes`` (keyed hashes

@@ -57,7 +57,7 @@ class BaseService:
             
         if self.current_user.tenant_id != tenant_id:
             # Recorded in its own session: committing self.session here would also commit
-            # whatever the calling service had pending (HONEY-020).
+            # whatever the calling service had pending.
             from app.services.audit_log import record_independently
             record_independently(
                 self.session,

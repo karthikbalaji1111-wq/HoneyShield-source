@@ -1,4 +1,4 @@
-"""HONEY-007: transactional outbox, webhook delivery, retries, dead letter, SSRF and tenancy."""
+"""Transactional outbox, webhook delivery, retries, dead letter, SSRF and tenancy."""
 from __future__ import annotations
 
 import json

@@ -1,4 +1,4 @@
-"""HONEY-006: every detection event records where it came from; manual evidence is attributed and audited."""
+"""Every detection event records where it came from; manual evidence is attributed and audited."""
 from __future__ import annotations
 
 import pytest

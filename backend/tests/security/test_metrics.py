@@ -1,4 +1,4 @@
-"""HONEY-027: /metrics exists only with a token, requires it, and leaks no secrets."""
+"""/metrics exists only with a token, requires it, and leaks no secrets."""
 from __future__ import annotations
 
 from app.core import metrics

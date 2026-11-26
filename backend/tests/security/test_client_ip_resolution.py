@@ -1,4 +1,4 @@
-"""HONEY-005: client IP is the rightmost *untrusted* X-Forwarded-For hop, never a client-chosen value."""
+"""Client IP is the rightmost *untrusted* X-Forwarded-For hop, never a client-chosen value."""
 from __future__ import annotations
 
 from unittest.mock import patch

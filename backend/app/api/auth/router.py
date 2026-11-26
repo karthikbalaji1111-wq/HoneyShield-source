@@ -65,7 +65,7 @@ def login(body: LoginRequest, auth_service: AuthServiceDependency, request: Requ
 
 
 # ---------------------------------------------------------------------------------- session lifecycle
-# HONEY-029. Access tokens are short-lived JWTs bound to users.token_version; bumping the version
+# Access tokens are short-lived JWTs bound to users.token_version; bumping the version
 # revokes every outstanding token of that user (all devices) on the next request, and live
 # streams within the revalidation window.
 
@@ -182,9 +182,8 @@ def change_password(body: PasswordChangeRequest, user: CurrentUser, session: Ses
     session.commit()
 
 
-
 # ---------------------------------------------------------------------------------- operator MFA
-# HONEY-029. TOTP (RFC 6238) with derived secrets, replay protection, hashed recovery codes.
+# TOTP (RFC 6238) with derived secrets, replay protection, hashed recovery codes.
 
 class MfaSetupRequest(SchemaBase):
     current_password: str = Field(max_length=200)

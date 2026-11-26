@@ -12,6 +12,7 @@ from app.api.v1.health import health_payload, readiness as v1_readiness
 from app.api.v1.router import api_router
 from app.api.ingestion.integrations import router as integration_ingest_router
 from app.api.metrics import router as metrics_router
+from app.api.internal.dns_hits import router as internal_dns_router
 from app.api.internal.replay import router as internal_replay_router
 from app.api.ingestion.router import router as ingestion_router
 from app.core.config import get_settings
@@ -83,6 +84,7 @@ app.include_router(ingestion_router)
 app.include_router(integration_ingest_router)
 app.include_router(metrics_router)
 app.include_router(internal_replay_router)
+app.include_router(internal_dns_router)
 
 
 @app.get(

@@ -18,7 +18,7 @@ target_metadata = Base.metadata
 
 def get_database_url() -> str:
     # Migrations run as the schema owner (MIGRATION_DATABASE_URL or POSTGRES_MIGRATION_USER),
-    # never as the runtime role, which cannot run DDL (HONEY-002).
+    # never as the runtime role, which cannot run DDL.
     return get_settings().migration_database_uri
 
 

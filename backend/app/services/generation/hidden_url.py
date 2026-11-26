@@ -17,6 +17,7 @@ class HiddenUrlGenerator(BaseGenerator):
         params: dict[str, Any],
         ingest_base_url: str | None = None,
         paths: Mapping[str, str] | None = None,
+        dns_zone: str | None = None,
     ) -> GeneratedTokenData:
         slug_prefixes = [
             "admin-portal",

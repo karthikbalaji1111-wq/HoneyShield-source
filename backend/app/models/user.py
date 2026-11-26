@@ -19,7 +19,7 @@ class User(BaseModel):
         CheckConstraint("token_version >= 0", name="token_version_nonnegative"),
         CheckConstraint("(NOT mfa_enabled) OR mfa_nonce IS NOT NULL", name="mfa_enabled_has_nonce"),
         Index("ix_users_tenant_created_at_id", "tenant_id", text("created_at DESC"), text("id DESC")),
-        # Case-insensitive identity (HONEY-022); created by migration 20261113_05.
+        # Case-insensitive identity; created by migration 20261113_05.
         Index("uq_users_email_lower", func.lower(text("email")), unique=True),
     )
 
@@ -31,7 +31,7 @@ class User(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     tenant_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
 
-    # Operator MFA (HONEY-029). The TOTP secret is derived from MFA_SECRET_KEY + id + nonce and is
+    # Operator MFA. The TOTP secret is derived from MFA_SECRET_KEY + id + nonce and is
     # never stored; recovery codes are stored only as keyed hashes.
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     mfa_nonce: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)

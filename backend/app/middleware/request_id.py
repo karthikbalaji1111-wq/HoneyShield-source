@@ -10,7 +10,7 @@ from starlette.responses import Response
 from app.core.logging import reset_request_id, set_request_id
 
 REQUEST_ID_HEADER = "X-Request-ID"
-# HONEY-033: an inbound id is reflected in responses and written to every log line, so only a
+# An inbound id is reflected in responses and written to every log line, so only a
 # short opaque token is accepted (Nginx supplies a 32-hex $request_id); anything else is replaced.
 _SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{8,64}$")
 

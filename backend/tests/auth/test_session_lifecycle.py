@@ -1,4 +1,4 @@
-"""HONEY-029: logout and password change revoke every outstanding token."""
+"""Logout and password change revoke every outstanding token."""
 from __future__ import annotations
 
 from tests.conftest import auth_headers

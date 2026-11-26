@@ -132,7 +132,7 @@ class AuthService:
         if defer_second_factor:
             return user
 
-        # Second factor (HONEY-029). Only reached after a correct password, so "MFA code required"
+        # Second factor. Only reached after a correct password, so "MFA code required"
         # reveals nothing to someone who does not already hold the password.
         if user.has_second_factor:
             from app.core.auth_exceptions import MfaRequiredError

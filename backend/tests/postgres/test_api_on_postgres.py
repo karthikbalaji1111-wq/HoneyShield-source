@@ -269,7 +269,7 @@ def test_concurrent_ingestion_produces_a_gapless_verified_chain(pg_client, app_e
 
 
 def test_authorization_denial_does_not_commit_the_callers_pending_work(app_engine, seeded):
-    """HONEY-020: the denial audit is written in its own transaction."""
+    """The denial audit is written in its own transaction."""
     from app.core.auth_exceptions import ForbiddenError
     from app.services.base import BaseService
 

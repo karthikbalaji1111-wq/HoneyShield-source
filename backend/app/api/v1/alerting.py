@@ -1,9 +1,8 @@
-"""Alert destinations (webhook, Slack/Teams, email, syslog/CEF) and delivery status.
+"""Alert destinations (webhook, Slack/Teams, email, syslog/CEF, PagerDuty) and delivery status.
 
 TENANT_ADMIN or above, tenant-scoped."""
 from __future__ import annotations
 
-import urllib.parse
 from datetime import datetime
 from typing import Annotated
 
@@ -36,7 +35,8 @@ router = APIRouter(prefix="/alert-destinations", tags=["alerting"])
 class AlertDestinationCreate(SchemaBase):
     url: str = Field(max_length=2048, description=(
         "HONEYSHIELD/SLACK: https URL on a public host. EMAIL: mailto:a@example.com[,b@example.com]. "
-        "SYSLOG_CEF: syslog+tls://siem.example.com:6514."))
+        "SYSLOG_CEF: syslog+tls://siem.example.com:6514. PAGERDUTY: pagerduty://<integration key> "
+        "(pagerduty+eu:// for the EU region)."))
     label: str | None = Field(default=None, max_length=255)
     format: AlertFormat = AlertFormat.HONEYSHIELD
     min_severity: EventSeverity = EventSeverity.MEDIUM
@@ -58,7 +58,8 @@ class AlertDestinationResponse(SchemaBase):
 class AlertDestinationCreated(AlertDestinationResponse):
     signing_secret: str | None = Field(description=(
         "Verify X-HS-Signature (webhook and email headers) with this. Shown once. None for SYSLOG_CEF, "
-        "which relies on TLS server authentication instead."))
+        "which relies on TLS server authentication instead, and for PAGERDUTY, which authenticates "
+        "HoneyShield by the integration key."))
 
 
 class DeliveryResponse(SchemaBase):
@@ -99,7 +100,9 @@ def create_destination(payload: AlertDestinationCreate, session: SessionDependen
         # names. The authoritative resolve-and-pin check runs in the worker at every delivery.
         alerting.check_destination(payload.url, payload.format, settings, resolve=False)
         if payload.format != AlertFormat.EMAIL:
-            host = urllib.parse.urlsplit(payload.url).hostname or ""
+            # (destination_host, not the URL's host: a PagerDuty URL's "host" is its integration key,
+            # which must never be sent to a DNS resolver)
+            host = alerting.destination_host(payload.url, payload.format)
             try:
                 resolved = webhook.default_resolver(host, 443)
             except OSError:
@@ -141,7 +144,7 @@ def create_destination(payload: AlertDestinationCreate, session: SessionDependen
     )
     session.commit()
     secret = None
-    if dest.format != AlertFormat.SYSLOG_CEF:
+    if dest.format not in (AlertFormat.SYSLOG_CEF, AlertFormat.PAGERDUTY):
         secret = webhook.signing_secret(settings.integration_signing_key, dest.public_id, dest.key_salt)
     return _out(dest, AlertDestinationCreated, signing_secret=secret)
 

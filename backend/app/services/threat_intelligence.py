@@ -226,7 +226,7 @@ class ThreatIntelligenceService(BaseService):
 
         settings = get_settings()
         with _analytics_budget(self.session), set_query_timeout(self.session, settings.db_analytics_timeout_ms):
-            # Ranked in SQL before LIMIT (HONEY-009), over a bounded recent window.
+            # Ranked in SQL before LIMIT, over a bounded recent window.
             rows, self.last_sampled = self.event_repo.rank_ip_activity(
                 tenant_id=self._tenant_id, since=since, limit=limit, weights=self._score_weights(),
                 sample=settings.analytics_sample_events)

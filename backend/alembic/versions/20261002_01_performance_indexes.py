@@ -4,7 +4,6 @@ Revision ID: 20261002_01
 Revises: 20260918_01
 Create Date: 2026-10-02 05:30:00.000000+00:00
 
-Phase 6 performance optimization:
 - Indexes users (tenant_id, created_at DESC, id DESC) to eliminate sort overhead and support keyset/offset pagination on tenant user listings.
 - Indexes audit_logs (tenant_id, created_at DESC, id DESC) to eliminate sort overhead on append-only forensic audit log tables.
 - Leading column tenant_id satisfies foreign-key constraint and cascade checks.

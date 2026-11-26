@@ -40,7 +40,7 @@ class HoneyTokenCreate(SchemaBase):
     @field_validator("metadata")
     @classmethod
     def bound_metadata(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
-        """HONEY-032: arbitrary metadata cannot consume unbounded storage."""
+        """Arbitrary metadata cannot consume unbounded storage."""
         if value is not None and len(json.dumps(value, default=str)) > 8192:
             raise ValueError("metadata must serialise to at most 8 KiB")
         return value
@@ -107,3 +107,7 @@ class HoneyTokenResponse(SchemaBase):
     updated_at: datetime = Field(description="Token last-update timestamp.")
     last_triggered_at: datetime | None = Field(
         default=None, description="When the decoy last fired (list endpoint); null if it never has.")
+    files: list[str] = Field(
+        default_factory=list, description=(
+            "Bait files this decoy can be downloaded as (GET /api/v1/honey-tokens/{decoy_id}/files/{kind}); "
+            "listed for administrators only."))

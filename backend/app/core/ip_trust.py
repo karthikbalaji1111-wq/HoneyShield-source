@@ -91,8 +91,8 @@ def client_from_forwarded_for(x_forwarded_for: str, trusted_proxies: list[str]) 
     Each proxy *appends* the address it received the request from, so only the
     right-hand end of the chain was written by infrastructure we trust; everything
     to the left may have been supplied by the client. Walk from the right, skip our
-    own trusted proxies, and return the first address that is not one of them
-    (HONEY-005). Taking the leftmost entry would let any client choose its
+    own trusted proxies, and return the first address that is not one of them.
+    Taking the leftmost entry would let any client choose its
     recorded IP by sending its own X-Forwarded-For header.
 
     A malformed hop stops the walk (None): addresses left of it cannot be trusted.

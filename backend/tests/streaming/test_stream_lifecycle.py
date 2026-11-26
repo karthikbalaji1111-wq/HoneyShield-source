@@ -1,4 +1,4 @@
-"""HONEY-014/025: streams end at JWT expiry and on role change; connections are capped."""
+"""Streams end at JWT expiry and on role change; connections are capped."""
 from __future__ import annotations
 
 import asyncio

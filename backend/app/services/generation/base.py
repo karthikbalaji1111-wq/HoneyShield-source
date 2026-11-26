@@ -44,6 +44,7 @@ class BaseGenerator(ABC):
         params: dict[str, Any],
         ingest_base_url: str | None = None,
         paths: Mapping[str, str] | None = None,
+        dns_zone: str | None = None,
     ) -> GeneratedTokenData:
         """Generate a realistic deception asset.
 
@@ -54,6 +55,7 @@ class BaseGenerator(ABC):
                 ``https://ingest.example.com``) that delivered artifacts must target.
             paths: Decoy path prefixes by kind ({"link": "t", "pixel": "px", "collect": "collect"}
                 unless the operator configured their own).
+            dns_zone: The zone delegated to HoneyShield's name server (DNS_TOKEN_ZONE), or None.
 
         Returns:
             A pure data transfer object containing the token and metadata.

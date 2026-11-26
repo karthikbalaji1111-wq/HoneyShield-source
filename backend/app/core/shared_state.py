@@ -1,4 +1,4 @@
-"""Cluster-shared state (Redis) for running several API replicas (HONEY-026).
+"""Cluster-shared state (Redis) for running several API replicas.
 
 What is shared when REDIS_URL is set
 * rate-limit windows (``app.core.rate_limit``): every replica counts against one budget;

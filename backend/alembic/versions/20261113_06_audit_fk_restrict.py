@@ -1,4 +1,4 @@
-"""Audit-log foreign keys: ON DELETE SET NULL -> no action (HONEY-010).
+"""Audit-log foreign keys: ON DELETE SET NULL -> no action.
 
 Revision ID: 20261113_06
 Revises: 20261113_05

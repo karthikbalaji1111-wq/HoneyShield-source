@@ -1,4 +1,4 @@
-"""Regression tests for HONEY-008: PATCH /users/{id} with is_active crashed (NameError)."""
+"""PATCH /users/{id} with is_active (used to crash with a NameError)."""
 from __future__ import annotations
 
 from app.models.audit_log import AuditLog

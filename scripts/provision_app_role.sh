@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # HoneyShield Principle of Least Privilege: Runtime Application Role Provisioning
-# ==============================================================================
 # Creates and configures the unprivileged honeyshield_app role.
 # Decouples runtime application CRUD access from migration/DDL administrative ownership.
 #
@@ -9,7 +7,6 @@
 # - detection_events and audit_logs: SELECT, INSERT only (UPDATE/DELETE/TRUNCATE denied at grant level)
 # - mutable tables (tenants, projects, users, honey_tokens, application_configs): SELECT, INSERT, UPDATE, DELETE
 # - DDL operations (ALTER, DROP, CREATE) and trigger management (DISABLE TRIGGER): Denied (non-owner)
-# ==============================================================================
 
 set -euo pipefail
 

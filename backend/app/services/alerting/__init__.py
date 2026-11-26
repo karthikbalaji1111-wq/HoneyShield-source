@@ -1,4 +1,4 @@
-"""Durable alert delivery through a transactional outbox (HONEY-007).
+"""Durable alert delivery through a transactional outbox.
 
 Persist first, notify second:
   1. ``enqueue_for_event`` runs inside the detection transaction and inserts one
@@ -24,11 +24,12 @@ from typing import Any
 from sqlalchemy import or_, select, text, update
 from sqlalchemy.orm import Session
 
+from app.core.attack import techniques_for
 from app.models.alerting import AlertDestination, AlertFormat, OutboxEvent, OutboxStatus
 from app.models.detection_event import DetectionEvent
 from app.models.enums import EventSeverity
 from app.models.honey_token import HoneyToken
-from app.services.alerting import channels, webhook
+from app.services.alerting import channels, pagerduty, webhook
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ def event_data(event: DetectionEvent, delivery_id: int) -> dict[str, Any]:
         "request_path": (event.request_path or "").replace(token.token_value, "{token}"),
         "triggered_at": triggered.isoformat() if triggered else None,
         "triggered_ms": int(triggered.timestamp() * 1000) if triggered else None,
+        "attack": [{"id": t["id"], "name": t["name"]} for t in techniques_for(token.token_type.value)],
     }
 
 
@@ -96,6 +98,7 @@ def test_event_data(dest: AlertDestination, delivery_id: int) -> dict[str, Any]:
         "decoy_id": "test", "token_label": "HoneyShield test alert - no decoy was triggered",
         "project": "honeyshield-test", "ip_address": "192.0.2.1", "http_method": "GET",
         "request_path": "/test-alert", "triggered_at": now.isoformat(), "triggered_ms": int(now.timestamp() * 1000),
+        "attack": [],
     }
 
 
@@ -108,9 +111,17 @@ def build_payload(event: DetectionEvent | None, dest: AlertDestination, delivery
             return {"text": "HoneyShield test alert: this destination is configured correctly. No decoy was triggered."}
         return {"text": (f"HoneyShield {data['severity']} alert: {data['token_type']} decoy "
                          f"'{data['token_label'] or data['decoy_id']}' in {data['project']} triggered from "
-                         f"{data['ip_address']} ({data['source']}) at {data['triggered_at']}. Event #{data['event_id']}.")}
+                         f"{data['ip_address']} ({data['source']}) at {data['triggered_at']}. Event #{data['event_id']}."
+                         + _attack_suffix(data))}
+    if dest.format == AlertFormat.PAGERDUTY:
+        return pagerduty.event(data, pagerduty.parse_url(dest.url).routing_key)
     kind = "honeyshield.test" if data["source"] == "TEST" else "honeyshield.detection"
     return {"type": kind, "version": 1, "data": data}
+
+
+def _attack_suffix(data: dict[str, Any]) -> str:
+    ids = [t["id"] for t in data.get("attack") or []]
+    return f" ATT&CK: {', '.join(ids)}." if ids else ""
 
 
 def check_destination(url: str, fmt: AlertFormat, settings: Any, *, resolve: bool = True,
@@ -122,6 +133,11 @@ def check_destination(url: str, fmt: AlertFormat, settings: Any, *, resolve: boo
     if fmt == AlertFormat.SYSLOG_CEF:
         return channels.validate_syslog_url(url, allow_plain=settings.alert_allow_http_webhooks, resolver=resolver,
                                             resolve=resolve, allowed_private=allowed)
+    if fmt == AlertFormat.PAGERDUTY:
+        # The routing key is checked here; the Events API host goes through the same SSRF checks
+        # as any webhook (it is a fixed public host, but the resolve-and-pin still applies).
+        return webhook.validate_url(pagerduty.parse_url(url).endpoint, resolver=resolver, resolve=resolve,
+                                    allowed_private=allowed)
     return webhook.validate_url(url, allow_http=settings.alert_allow_http_webhooks, resolver=resolver,
                                 resolve=resolve, allowed_private=allowed)
 
@@ -130,6 +146,8 @@ def destination_host(url: str, fmt: AlertFormat) -> str:
     """For audit records: where alerts go, without paths or secrets in query strings."""
     if fmt == AlertFormat.EMAIL:
         return ",".join(sorted({a.rsplit("@", 1)[-1].lower() for a in channels.parse_mailto(url)}))
+    if fmt == AlertFormat.PAGERDUTY:
+        return urllib.parse.urlsplit(pagerduty.parse_url(url).endpoint).hostname or ""
     return (urllib.parse.urlsplit(url).hostname or "").lower()
 
 

@@ -1,4 +1,4 @@
-"""ASGI middleware for API-wide rate limiting and admission control (F-011)."""
+"""ASGI middleware for API-wide rate limiting and admission control."""
 from __future__ import annotations
 
 import hashlib
@@ -56,12 +56,12 @@ class ApiRateLimitMiddleware:
 
         path = scope.get("path", "")
 
-        # 1. Exempt health, readiness, and documentation endpoints
+        # Exempt health, readiness, and documentation endpoints
         if path in EXEMPT_PATHS:
             await self.app(scope, receive, send)
             return
 
-        # 2. Ingestion paths have specialized forensic abuse control
+        # Ingestion paths have specialized forensic abuse control
         if path.startswith(decoy_paths.decoy_prefixes(settings)):
             await self.app(scope, receive, send)
             return
@@ -69,7 +69,7 @@ class ApiRateLimitMiddleware:
         headers = Headers(scope=scope)
         request_id = headers.get("x-request-id", "-")
 
-        # 3. Determine identity and applicable rate limit
+        # Determine identity and applicable rate limit
         client_host = scope.get("client", (None, None))[0] if scope.get("client") else None
         client_ip = self._resolve_ip(client_host, headers, settings)
 
@@ -96,7 +96,7 @@ class ApiRateLimitMiddleware:
                 rate_key = f"public_ip:{client_ip}"
                 limit = settings.rate_limit_per_minute_public
 
-        # 4. Check admission control
+        # Check admission control
         allowed, retry_after = api_limiter.check_and_increment(
             key=rate_key,
             limit=limit,

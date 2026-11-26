@@ -1,4 +1,4 @@
-"""Operator MFA columns on users (HONEY-029).
+"""Operator MFA columns on users.
 
 Revision ID: 20261116_01
 Revises: 20261113_06

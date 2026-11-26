@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
-    # HONEY-002: identities. POSTGRES_USER/PASSWORD above are what the API connects as and
+    # Identities. POSTGRES_USER/PASSWORD above are what the API connects as and
     # must be the unprivileged runtime role in production. The migration owner is used only
     # by Alembic and the grant step (python -m app.db.privileges grant).
     postgres_app_user: Optional[str] = None
@@ -72,8 +72,8 @@ class Settings(BaseSettings):
     login_account_failure_window_seconds: int = Field(default=900, ge=60, le=86400)
     login_global_attempts_per_minute: int = Field(default=600, ge=1, le=10000)
 
-    # Phase 7 — Input Security & Rate Limiting Settings
-    max_request_body_bytes: int = Field(default=1_048_576, ge=1024, le=52_428_800)  # Default: 1 MB
+    # Request size and rate limits
+    max_request_body_bytes: int = Field(default=1_048_576, ge=1024, le=52_428_800)  # 1 MB
     rate_limit_enabled: bool = Field(default=True)
     rate_limit_per_minute_authenticated: int = Field(default=300, ge=1, le=10000)
     rate_limit_per_minute_public: int = Field(default=120, ge=1, le=10000)
@@ -81,13 +81,13 @@ class Settings(BaseSettings):
     ingestion_rate_limit_per_minute_ip: int = Field(default=120, ge=1, le=10000)
     ingestion_rate_limit_per_minute_token: int = Field(default=60, ge=1, le=10000)
 
-    # Phase 7 — Header Security Settings
+    # Limits on request headers stored with an event
     header_max_key_length: int = Field(default=64, ge=8, le=256)
     header_max_value_length: int = Field(default=1024, ge=16, le=8192)
     header_max_count: int = Field(default=30, ge=5, le=100)
     header_max_total_bytes: int = Field(default=4096, ge=512, le=32768)
 
-    # Phase 7 — Trusted Proxy Settings
+    # Proxies allowed to set X-Forwarded-For
     trusted_proxies: Union[list[str], str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
 
     # Public HoneyShield ingestion origin embedded in every generated honey-token artifact
@@ -101,6 +101,31 @@ class Settings(BaseSettings):
     # Keep answering on /t/, /px/ and /collect/ for decoys generated before the paths changed.
     decoy_legacy_paths: bool = True
 
+    # DNS decoys (docs/dns-tokens.md): the zone delegated to the dns service, e.g. dns.example.com.
+    # Unset: DNS decoys cannot be generated.
+    dns_token_zone: Optional[str] = None
+    # Cloud canaries (docs/cloud-canaries.md): real AWS access keys that can do nothing, created and
+    # watched by the cloud-canary worker. Any use of one is recorded by AWS CloudTrail.
+    aws_canary_enabled: bool = False
+    aws_canary_access_key_id: Optional[str] = Field(default=None, repr=False)
+    aws_canary_secret_access_key: Optional[str] = Field(default=None, repr=False)
+    # IAM path of the canary users; the worker's IAM policy is scoped to it. Pick something ordinary:
+    # an attacker who calls sts get-caller-identity sees it in the user's ARN.
+    aws_canary_iam_path: str = Field(default="/svc/", pattern=r"^/([A-Za-z0-9+=,.@_-]+/)*$", max_length=512)
+    # Regions whose CloudTrail event history is read (comma-separated). Unset: the regions every
+    # AWS account has enabled by default.
+    aws_canary_regions: Optional[str] = None
+    # ARN of a deny-all managed policy set as every canary user's permissions boundary. With the IAM
+    # policy in docs/cloud-canaries.md it makes the worker's own key useless for creating a user that
+    # can do anything, even if that key is stolen.
+    aws_canary_permissions_boundary: Optional[str] = Field(
+        default=None, pattern=r"^arn:aws[a-z-]*:iam::\d{12}:policy/[A-Za-z0-9+=,.@_/-]+$")
+    aws_canary_poll_seconds: int = Field(default=300, ge=60, le=3600)
+    # CloudTrail delivers events up to about 15 minutes late; each poll reads back this far.
+    aws_canary_lookback_minutes: int = Field(default=30, ge=15, le=1440)
+    # Testing only: send every AWS request to this URL instead of the real AWS endpoints.
+    aws_canary_endpoint_url: Optional[str] = None
+
     # Hostnames that serve the operator API (e.g. app.example.com). When set together with
     # PUBLIC_INGEST_BASE_URL, the app enforces host separation: ingest routes are served only
     # on the ingest host and every other route only on a control-plane host. Required in production.
@@ -109,14 +134,14 @@ class Settings(BaseSettings):
     # address. The edge enforces it (HS_CONTROL_ALLOW_CIDRS) and the backend re-checks every request
     # that arrives through the trusted proxy. The ingest host is never restricted.
     control_plane_allowed_cidrs: Optional[str] = None
-    # OpenAPI/Swagger UI. Off by default in production/staging (HONEY-033).
+    # OpenAPI/Swagger UI. Off by default in production/staging.
     expose_api_docs: Optional[bool] = None
 
     # Master key from which every customer-integration signing secret is derived
     # (HMAC-SHA256(key, public_id | salt)). Rotating it invalidates all integration
     # credentials. Required in production; integrations are disabled when unset.
     integration_signing_key: Optional[str] = Field(default=None, repr=False)
-    # Operator MFA (HONEY-029). TOTP secrets are derived as HMAC-SHA256(MFA_SECRET_KEY, user | nonce)
+    # Operator MFA. TOTP secrets are derived as HMAC-SHA256(MFA_SECRET_KEY, user | nonce)
     # and never stored. Required in production; development/test derive a key from JWT_SECRET_KEY.
     # Rotating it invalidates every enrolment (users re-enrol after an admin reset).
     mfa_secret_key: Optional[str] = Field(default=None, repr=False)
@@ -134,7 +159,7 @@ class Settings(BaseSettings):
     integration_timestamp_tolerance_seconds: int = Field(default=300, ge=30, le=900)
     integration_reports_per_minute: int = Field(default=1200, ge=1, le=100000)
 
-    # Alert delivery (HONEY-007). Webhook signing secrets are derived from
+    # Alert delivery. Webhook signing secrets are derived from
     # INTEGRATION_SIGNING_KEY with a separate label. Private/loopback/link-local targets are
     # always refused; plain http is refused unless explicitly allowed (development only).
     alert_allow_http_webhooks: bool = Field(default=False)
@@ -230,7 +255,7 @@ class Settings(BaseSettings):
     backup_pg_dump: str = "pg_dump"
     backup_pg_restore: str = "pg_restore"
 
-    # Phase 11 — CORS Policy Settings (F-014)
+    # CORS
     cors_allowed_origins: Union[list[str], str] = Field(default_factory=list)
     cors_allow_credentials: bool = Field(default=False)
     cors_allow_methods: Union[list[str], str] = Field(
@@ -244,7 +269,7 @@ class Settings(BaseSettings):
     )
     cors_max_age: int = Field(default=600, ge=0, le=86400)
 
-    # Phase 10 — Security Headers Settings (F-015)
+    # Response security headers
     security_headers_enabled: bool = Field(default=True)
     security_headers_x_content_type_options: str = Field(default="nosniff")
     security_headers_x_frame_options: str = Field(default="DENY")
@@ -258,6 +283,12 @@ class Settings(BaseSettings):
     security_headers_hsts_max_age: int = Field(default=31536000, ge=0, le=63072000)
     security_headers_hsts_include_subdomains: bool = Field(default=True)
     security_headers_hsts_preload: bool = Field(default=False)
+
+    @field_validator("dns_token_zone", mode="before")
+    @classmethod
+    def validate_dns_token_zone(cls, value: Any) -> Optional[str]:
+        from app.core.dns_tokens import normalise_zone
+        return normalise_zone(value) if isinstance(value, str) else value
 
     @field_validator("trusted_proxies", mode="before")
     @classmethod

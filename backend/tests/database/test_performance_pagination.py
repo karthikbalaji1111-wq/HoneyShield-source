@@ -1,4 +1,4 @@
-"""Phase 6: Database performance, SQL statistics, pagination, timeout and connection pool tests."""
+"""Database performance, SQL statistics, pagination, timeout and connection pool tests."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -22,12 +22,8 @@ from app.services.detection_event import DetectionEventService
 from tests.conftest import auth_headers
 
 
-# ---------------------------------------------------------------------------
-# Test 1: Explicit Connection Pool & Statement Timeout Settings (F-017, F-018)
-# ---------------------------------------------------------------------------
-
 def test_connection_pool_and_timeout_settings(db_session: Session) -> None:
-    """Verify that connection pool policy and statement timeouts are configured as required."""
+    """Connection pool policy and statement timeouts are configured as required."""
     settings = get_settings()
     assert settings.db_pool_size == 10
     assert settings.db_max_overflow == 10
@@ -36,16 +32,11 @@ def test_connection_pool_and_timeout_settings(db_session: Session) -> None:
     assert settings.db_statement_timeout_ms == 5000
     assert settings.db_analytics_timeout_ms == 15000
 
-    # Test set_query_timeout context manager executes cleanly
     with set_query_timeout(db_session, timeout_ms=settings.db_analytics_timeout_ms):
         # On SQLite dialect, set_query_timeout safely passes through without syntax error
         result = db_session.query(Tenant).all()
         assert isinstance(result, list)
 
-
-# ---------------------------------------------------------------------------
-# Test 2: Single-Pass SQL Statistics (F-002)
-# ---------------------------------------------------------------------------
 
 def test_tenant_statistics_single_pass_sql(
     db_session: Session,
@@ -54,7 +45,7 @@ def test_tenant_statistics_single_pass_sql(
     token_a: HoneyToken,
     token_b: HoneyToken,
 ) -> None:
-    """Verify that count_summary computes total and today in a single SQL aggregation."""
+    """Count_summary computes total and today in a single SQL aggregation."""
     repo = DetectionEventRepository(db_session)
     now = datetime.now(timezone.utc)
     yesterday = now - timedelta(days=1, hours=2)
@@ -98,17 +89,14 @@ def test_tenant_statistics_single_pass_sql(
     db_session.add_all([event_a1, event_a2, event_a3, event_b1])
     db_session.flush()
 
-    # Query Tenant A summary
     total_a, today_a = repo.count_summary(tenant_id=tenant_a.id)
     assert total_a == 3
     assert today_a == 2
 
-    # Query Tenant B summary
     total_b, today_b = repo.count_summary(tenant_id=tenant_b.id)
     assert total_b == 1
     assert today_b == 1
 
-    # Verify global summary (SYSTEM_ADMIN)
     total_global, today_global = repo.count_summary(tenant_id=None)
     assert total_global == 4
     assert today_global == 3
@@ -129,10 +117,6 @@ def test_tenant_statistics_single_pass_sql(
     assert stats["today_events"] == 2
 
 
-# ---------------------------------------------------------------------------
-# Test 3: Tenants Endpoint Pagination (F-016)
-# ---------------------------------------------------------------------------
-
 def test_tenants_pagination(
     client: TestClient,
     system_admin: User,
@@ -141,7 +125,6 @@ def test_tenants_pagination(
     """Verify limit, offset, and deterministic tie-breaking on /tenants."""
     headers = auth_headers(system_admin)
 
-    # Create additional tenants with deterministic names
     for i in range(5):
         t = Tenant(name=f"Paginated Tenant {i:02d}", slug=f"paginated-tenant-{i:02d}", is_active=True)
         db_session.add(t)
@@ -172,10 +155,6 @@ def test_tenants_pagination(
     resp_invalid = client.get("/api/v1/tenants?limit=101", headers=headers)
     assert resp_invalid.status_code == 422
 
-
-# ---------------------------------------------------------------------------
-# Test 4: Projects Endpoint Pagination (F-016)
-# ---------------------------------------------------------------------------
 
 def test_projects_pagination(
     client: TestClient,
@@ -214,10 +193,6 @@ def test_projects_pagination(
     assert resp_invalid.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# Test 5: HoneyTokens Endpoint Pagination and Tenant Isolation (F-016, F-023)
-# ---------------------------------------------------------------------------
-
 def test_honey_tokens_pagination_and_sql_tenant_isolation(
     client: TestClient,
     admin_a: User,
@@ -229,7 +204,6 @@ def test_honey_tokens_pagination_and_sql_tenant_isolation(
     """Verify HoneyTokens pagination and strict SQL tenant isolation without in-memory leak."""
     headers_a = auth_headers(admin_a)
 
-    # Create 3 tokens for Tenant A and 3 tokens for Tenant B
     for i in range(3):
         t_a = HoneyToken(
             project_id=project_a.id,
@@ -268,10 +242,6 @@ def test_honey_tokens_pagination_and_sql_tenant_isolation(
     assert resp_invalid.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# Test 6: Users Endpoint Pagination (F-016)
-# ---------------------------------------------------------------------------
-
 def test_users_pagination(
     client: TestClient,
     admin_a: User,
@@ -309,10 +279,6 @@ def test_users_pagination(
     resp_invalid = client.get("/api/v1/users?limit=101", headers=headers)
     assert resp_invalid.status_code == 422
 
-
-# ---------------------------------------------------------------------------
-# Test 7: Detection Events Keyset Cursor and Offset Pagination (F-016)
-# ---------------------------------------------------------------------------
 
 def test_detection_events_keyset_cursor_and_offset_pagination(
     client: TestClient,
@@ -373,10 +339,6 @@ def test_detection_events_keyset_cursor_and_offset_pagination(
     assert resp_invalid.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# Test 8: Threat Timeline Pagination (F-016)
-# ---------------------------------------------------------------------------
-
 def test_threat_timeline_pagination(
     client: TestClient,
     admin_a: User,
@@ -417,21 +379,17 @@ def test_threat_timeline_pagination(
     assert resp_invalid.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# Test 9: Threat Intelligence Bounded Window & Summary
-# ---------------------------------------------------------------------------
-
 def test_threat_intelligence_bounds_and_summary(
     client: TestClient,
     admin_a: User,
     token_a: HoneyToken,
     db_session: Session,
 ) -> None:
-    """Verify that get_top_attackers and get_summary filter out events older than 30 days."""
+    """Get_top_attackers and get_summary filter out events older than 30 days."""
     headers = auth_headers(admin_a)
     now = datetime.now(timezone.utc)
 
-    # 1. Recent event (within 30 days)
+    # Recent event (within 30 days)
     recent_event = DetectionEvent(source=EventSource.PUBLIC_INGEST,
         honey_token_id=token_a.id,
         ip_address="198.51.100.88",
@@ -440,7 +398,7 @@ def test_threat_intelligence_bounds_and_summary(
         severity=EventSeverity.HIGH,
         triggered_at=now - timedelta(days=5),
     )
-    # 2. Ancient event (older than 30 days: 45 days ago)
+    # Ancient event (older than 30 days: 45 days ago)
     old_event = DetectionEvent(source=EventSource.PUBLIC_INGEST,
         honey_token_id=token_a.id,
         ip_address="198.51.100.77",
@@ -452,14 +410,12 @@ def test_threat_intelligence_bounds_and_summary(
     db_session.add_all([recent_event, old_event])
     db_session.flush()
 
-    # Query top-attackers
     resp_top = client.get("/api/v1/threats/top-attackers", headers=headers)
     assert resp_top.status_code == 200
     top_ips = [a["ip_address"] for a in resp_top.json()]
     assert "198.51.100.88" in top_ips
     assert "198.51.100.77" not in top_ips
 
-    # Query summary (default 30 days)
     resp_sum = client.get("/api/v1/threats/summary", headers=headers)
     assert resp_sum.status_code == 200
     summary = resp_sum.json()

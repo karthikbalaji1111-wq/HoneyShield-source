@@ -207,11 +207,17 @@
             <option value="URL">Hidden URL</option>
             <option value="LINK">Hidden link</option>
             <option value="PIXEL">Tracking pixel</option>
+            <option value="DOCUMENT">Word document (alerts when opened)</option>
             <option value="FORM_FIELD">Form honeypot (needs integration)</option>
             <option value="API_KEY">Fake API key (needs integration)</option>
+            <option value="DNS">DNS host name</option>
+            <option value="AWS_KEY">AWS access key (real, can do nothing)</option>
           </select>
           <select name="provider_style" aria-label="Key style" hidden>
             <option value="">Generic key format</option><option value="stripe">Looks like a Stripe key</option><option value="openai">Looks like an OpenAI key</option>
+          </select>
+          <select name="template" aria-label="Document" hidden>
+            <option value="">Any document</option><option value="vpn_access">Contractor VPN access</option><option value="server_inventory">Server inventory and admin accounts</option><option value="salary_review">Salary review (draft)</option><option value="board_minutes">Board minutes (confidential)</option>
           </select>
           <button type="submit">Generate decoy</button>
         </form>
@@ -245,7 +251,8 @@
         <div class="panel-foot">
           <button id="events-more" class="secondary" hidden>Load older</button>
           <p class="legend"><strong>Source</strong> PUBLIC_INGEST: observed by HoneyShield · CUSTOMER_HOOK: reported by your
-            integration (IP and time asserted by you) · MANUAL: entered by a user · LEGACY_UNVERIFIED: recorded before provenance existed.</p>
+            integration (IP and time asserted by you) · CLOUD_AUDIT: recorded by AWS CloudTrail · MANUAL: entered by a user ·
+            LEGACY_UNVERIFIED: recorded before provenance existed.</p>
         </div>
       </div>
     </section>
@@ -272,7 +279,7 @@
         <div class="panel-head"><h2>Destinations</h2></div>
         <form method="post" id="alert-form" class="form-grid">
           <label>Type
-            <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option></select></label>
+            <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option><option value="PAGERDUTY">PagerDuty</option></select></label>
           <label class="span-2">Address
             <input name="url" required maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="alert-url-hint">
             <span id="alert-url-hint" class="hint"></span></label>

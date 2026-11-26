@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # HoneyShield Production PostgreSQL Backup Automation
-# ==============================================================================
 set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-./backups}"

@@ -35,7 +35,7 @@ def _script_directory() -> ScriptDirectory:
 
 @lru_cache(maxsize=1)
 def expected_migration_heads() -> frozenset[str]:
-    """Parsed once per process; the scripts cannot change under a running image (HONEY-034)."""
+    """Parsed once per process; the scripts cannot change under a running image."""
     return frozenset(_script_directory().get_heads())
 
 
@@ -84,7 +84,7 @@ def health_check() -> HealthResponse:
 def readiness(session: Annotated[Session, Depends(get_db)]):
     """Check connectivity and migration revision; liveness remains DB-free."""
     try:
-        # Minimal low-overhead connectivity check (F-017 / Phase 9)
+        # Minimal low-overhead connectivity check
         session.execute(text("SELECT 1"))
 
         actual = set(session.execute(text("SELECT version_num FROM alembic_version")).scalars())

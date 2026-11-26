@@ -1,4 +1,4 @@
-"""TOTP (RFC 6238 / RFC 4226) and recovery-code primitives for operator MFA (HONEY-029).
+"""TOTP (RFC 6238 / RFC 4226) and recovery-code primitives for operator MFA.
 
 Secrets are derived, never stored: secret = HMAC-SHA256(MFA_SECRET_KEY, "honeyshield-totp-v1|id|nonce")
 truncated to 160 bits (the RFC 4226 recommended length). Re-enrolment changes the nonce and

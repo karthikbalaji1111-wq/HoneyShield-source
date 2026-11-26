@@ -1,4 +1,4 @@
-"""Security headers hardening middleware (Finding F-015 / Phase 10)."""
+"""Security headers hardening middleware."""
 from __future__ import annotations
 
 import logging
@@ -34,7 +34,7 @@ def set_header_if_absent(headers: MutableHeaders, key: str, value: str) -> None:
 
 
 class SecurityHeadersMiddleware:
-    """Enforces centralized HTTP response security headers at the ASGI boundary (F-015).
+    """Enforces centralized HTTP response security headers at the ASGI boundary.
 
     Headers enforced:
     - X-Content-Type-Options: nosniff

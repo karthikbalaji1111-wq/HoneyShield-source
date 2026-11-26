@@ -24,7 +24,7 @@ REVALIDATION_INTERVAL_SECONDS: float = 30.0
 class StreamAuthContext:
     """Detached authorization context for long-lived streams.
 
-    Does NOT retain a SQLAlchemy Session or live ORM object (fixes F-001).
+    Does NOT retain a SQLAlchemy Session or live ORM object.
     """
 
     user_id: int
@@ -32,7 +32,7 @@ class StreamAuthContext:
     role: str
     token_version: int
     is_active: bool
-    expires_at: float = float("inf")  # JWT exp (epoch seconds); streams end here (HONEY-014)
+    expires_at: float = float("inf")  # JWT exp (epoch seconds); streams end here
 
     def seconds_left(self) -> float:
         import time
@@ -45,7 +45,7 @@ def acquire_db_session():
 
     Uses app.dependency_overrides when present (e.g. In tests) and defaults
     to get_db() in production, ensuring sessions are closed and connections
-    are immediately returned to the pool (fixes F-001).
+    are immediately returned to the pool.
     """
     from app.main import app
     factory = app.dependency_overrides.get(get_db, get_db)
@@ -66,7 +66,7 @@ def authenticate_streaming_token(token: str) -> StreamAuthContext | None:
     """Validate a JWT against the database in a short-lived session, returning a detached auth context.
 
     The database session is closed immediately after authentication, ensuring that no
-    SQLAlchemy session or connection is retained during streaming (fixes F-001).
+    SQLAlchemy session or connection is retained during streaming.
     """
     from app.models.tenant import Tenant
 
@@ -94,7 +94,7 @@ def authenticate_streaming_token(token: str) -> StreamAuthContext | None:
 
 
 def revalidate_streaming_context(context: StreamAuthContext) -> bool:
-    """Check if the user, token version, and tenant remain valid and active (fixes F-008).
+    """Check if the user, token version, and tenant remain valid and active.
 
     Uses a fast primary-key lookup in an isolated short-lived session that is immediately closed.
     """
@@ -129,7 +129,7 @@ def get_sse_user(
     """Authenticate SSE connections in a short-lived DB session and return detached auth context.
 
     Checks Authorization header first (preferred), then falls back to 'token' query param
-    for browser EventSource compatibility (F-009). The DB session is closed immediately.
+    for browser EventSource compatibility. The DB session is closed immediately.
     """
     from app.core.auth_exceptions import UnauthorizedError
 
@@ -217,12 +217,12 @@ async def websocket_stream(
 
     Authentication occurs via an initial message: {"type": "auth", "token": "..."}.
     The database session is used ONLY during authentication, and is immediately closed.
-    Zero database connections are retained during streaming (fixes F-001).
+    Zero database connections are retained during streaming.
     """
     await websocket.accept()
 
     try:
-        # 1. Initial-message authentication
+        # Initial-message authentication
         auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
         if not isinstance(auth_msg, dict) or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid auth message format")
@@ -242,7 +242,7 @@ async def websocket_stream(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication error")
         return
 
-    # 2. Subscribe to real-time events with detached auth context
+    # Subscribe to real-time events with detached auth context
     broadcaster = get_broadcaster()
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=broadcaster.MAX_QUEUE_SIZE)
     try:
@@ -274,7 +274,7 @@ async def websocket_stream(
             pass
 
     async def revalidate_loop() -> None:
-        """Periodically revalidate the user's active status, token_version, and tenant status (F-008)."""
+        """Periodically revalidate the user's active status, token_version, and tenant status."""
         try:
             while True:
                 await asyncio.sleep(max(0.05, min(REVALIDATION_INTERVAL_SECONDS, auth_ctx.seconds_left())))
@@ -291,7 +291,7 @@ async def websocket_stream(
         except asyncio.CancelledError:
             pass
 
-    # 3. Run full-duplex communication until client disconnects or revalidation fails
+    # Run full-duplex communication until client disconnects or revalidation fails
     sender = asyncio.create_task(send_events())
     receiver = asyncio.create_task(receive_messages())
     revalidator = asyncio.create_task(revalidate_loop())

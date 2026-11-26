@@ -157,7 +157,7 @@ class UserService(BaseService):
             raise
 
     def _ensure_not_last_system_admin(self, user: User, new_role: Role, new_active: bool) -> None:
-        """HONEY-023: the platform must always keep one active SYSTEM_ADMIN.
+        """The platform must always keep one active SYSTEM_ADMIN.
 
         Locks every active SYSTEM_ADMIN row so two concurrent demotions cannot both pass.
         """
@@ -297,9 +297,8 @@ class UserService(BaseService):
                 pass
             raise
 
-
     def reset_mfa(self, user_id: int, reason: str, source: str | None = None) -> User:
-        """Clear a user's MFA enrolment and revoke their sessions (HONEY-029)."""
+        """Clear a user's MFA enrolment and revoke their sessions."""
         from app.services.mfa import MfaService
         user = self.get_user(user_id)
         return MfaService(self.session, self.audit_service).admin_reset(self.current_user, user, reason, source)

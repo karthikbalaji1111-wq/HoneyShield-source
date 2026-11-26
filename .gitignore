@@ -39,3 +39,6 @@ backups/
 
 # Hypothesis (fuzz tests) example database
 .hypothesis/
+
+# Live pilot: decoy values, integration secret, measurements (pilot/README.md)
+pilot-state/

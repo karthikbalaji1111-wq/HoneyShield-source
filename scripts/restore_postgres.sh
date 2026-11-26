@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
 # HoneyShield Production PostgreSQL Restore Automation
-# ==============================================================================
 set -euo pipefail
 
 if [ "$#" -lt 1 ]; then

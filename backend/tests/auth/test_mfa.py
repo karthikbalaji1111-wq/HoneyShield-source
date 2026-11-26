@@ -1,4 +1,4 @@
-"""Operator MFA (HONEY-029): TOTP primitives, enrolment, login, enforcement, recovery, reset."""
+"""Operator MFA: TOTP primitives, enrolment, login, enforcement, recovery, reset."""
 from __future__ import annotations
 
 import types

@@ -11,7 +11,7 @@ Password = Annotated[str, AfterValidator(validate_password_bytes)]
 
 
 def normalize_email(value: str | None) -> str | None:
-    """HONEY-022: one identity per mailbox regardless of letter case or stray whitespace."""
+    """One identity per mailbox regardless of letter case or stray whitespace."""
     return value.strip().lower() if isinstance(value, str) else value
 
 

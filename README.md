@@ -65,7 +65,7 @@ On Kubernetes, use the Helm chart in `deploy/helm/honeyshield`: see [docs/kubern
 ## How it works
 
 You create a project for each application you want to protect and generate decoys for it. There
-are five kinds:
+are eight kinds:
 
 - A hidden URL: a path that only shows up where an intruder would look, such as a commented-out
   line in a config file or a `Disallow` line in robots.txt.
@@ -73,6 +73,15 @@ are five kinds:
 - A tracking pixel: a tiny image for decoy documents and decoy emails. Opening one fires it.
 - A fake API key: a credential that looks real and is planted in decoy config files or repositories.
 - A form honeypot: a field people never see, so only a bot fills it in.
+- A Word document: a file with a tempting name that reports being opened in Word.
+- A DNS host name: any lookup of it is recorded, so it works in config files and scripts with
+  nothing installed, even from networks that block everything but DNS. Needs a zone you delegate
+  to HoneyShield.
+- An AWS access key: a real key that can do nothing. Any use of it, from any tool, is read from
+  AWS CloudTrail. Needs an AWS account set aside for canaries.
+
+Decoys can be downloaded already inside the files intruders look for: `~/.aws/credentials`,
+`.env`, a kubeconfig, an SSH config, the Word document.
 
 URLs, links and pixels point at HoneyShield's public ingest address, so HoneyShield sees the request
 itself. Fake keys and form fields are noticed inside your own application: a small hook (a reference
@@ -91,7 +100,8 @@ it is recorded with the time the edge saw it, exactly once. This was tested by s
 the database, while sending hits: every one was recorded, none twice.
 
 When an event arrives, HoneyShield alerts the destinations you have set up: a signed JSON webhook,
-Slack or Microsoft Teams, email, or a SIEM over syslog with TLS. Alerts go through a queue with
+Slack or Microsoft Teams, email, PagerDuty, or a SIEM over syslog with TLS. Each alert names the
+MITRE ATT&CK techniques the decoy points to. Alerts go through a queue with
 retries, so a receiver that is down for a while still gets every alert once it comes back.
 
 

@@ -1,4 +1,4 @@
-"""HONEY-022 (case-insensitive email), HONEY-023 (last SYSTEM_ADMIN), HONEY-013/024 (domains)."""
+"""Case-insensitive email, the last SYSTEM_ADMIN, and project domains."""
 from __future__ import annotations
 
 from app.core.security import get_password_hash

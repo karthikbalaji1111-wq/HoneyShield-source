@@ -42,8 +42,9 @@ def sanitize_forensic_headers(
     max_value_length: int = 1024,
     max_count: int = 30,
     max_total_bytes: int = 4096,
+    allowed: frozenset[str] | None = None,
 ) -> dict[str, str] | None:
-    """Sanitize and bound HTTP headers before persisting into forensic records (F-013).
+    """Sanitize and bound HTTP headers before persisting into forensic records.
 
     Rules:
     1. Filter out all non-allowlisted headers and all credential-bearing headers.
@@ -51,6 +52,9 @@ def sanitize_forensic_headers(
     3. Truncate header values deterministically to max_value_length.
     4. Cap total number of retained headers to max_count.
     5. Ensure total JSON representation does not exceed max_total_bytes.
+
+    ``allowed`` replaces the HTTP allowlist for events that are not HTTP requests (DNS, cloud audit
+    logs), so their context keys can never be supplied as headers of an HTTP hit.
     """
     if not headers or not isinstance(headers, Mapping):
         return None
@@ -74,7 +78,7 @@ def sanitize_forensic_headers(
             continue
 
         # Must be in the explicit forensic allowlist
-        if key not in ALLOWED_FORENSIC_HEADERS:
+        if key not in (ALLOWED_FORENSIC_HEADERS if allowed is None else allowed):
             continue
 
         # Convert value to safe truncated string

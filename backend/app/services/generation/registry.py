@@ -1,4 +1,3 @@
-
 """Static registry for token generators."""
 from __future__ import annotations
 
@@ -6,7 +5,10 @@ from typing import Mapping
 
 from app.models.enums import HoneyTokenType
 from app.services.generation.api_key import ApiKeyGenerator
+from app.services.generation.aws_key import AwsKeyGenerator
 from app.services.generation.base import BaseGenerator
+from app.services.generation.dns import DnsGenerator
+from app.services.generation.document import DocumentGenerator
 from app.services.generation.form_field import FormFieldGenerator
 from app.services.generation.hidden_url import HiddenUrlGenerator
 from app.services.generation.link import LinkGenerator
@@ -19,4 +21,7 @@ GENERATOR_REGISTRY: dict[HoneyTokenType, BaseGenerator] = {
     HoneyTokenType.PIXEL: TrackingPixelGenerator(),
     HoneyTokenType.LINK: LinkGenerator(),
     HoneyTokenType.FORM_FIELD: FormFieldGenerator(),
+    HoneyTokenType.DNS: DnsGenerator(),
+    HoneyTokenType.AWS_KEY: AwsKeyGenerator(),
+    HoneyTokenType.DOCUMENT: DocumentGenerator(),
 }

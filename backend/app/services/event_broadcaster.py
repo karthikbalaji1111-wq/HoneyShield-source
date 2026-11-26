@@ -16,8 +16,8 @@ thread.  A ``threading.Lock`` protects the subscriber registry.  When
 publishing from a sync thread, ``call_soon_threadsafe`` is used to
 safely enqueue into the async queues.
 
-Several replicas (HONEY-026)
-----------------------------
+Several replicas
+----------------
 With REDIS_URL set, ``publish()`` delivers to this process's clients first and then publishes
 the event on the Redis channel ``hs:events``. A relay thread in every replica subscribes to
 that channel and delivers messages from other replicas to its own clients (tenant filtering
@@ -54,7 +54,7 @@ class _Subscriber:
         self.loop = loop
 
 
-#: Process-local counters exposed on /metrics (HONEY-025/027).
+#: Process-local counters exposed on /metrics.
 STATS: dict[str, int] = {"dropped_events": 0, "rejected_subscriptions": 0, "published_events": 0,
                          "relayed_in": 0, "relay_publish_errors": 0}
 CHANNEL = "hs:events"
@@ -98,7 +98,7 @@ class EventBroadcaster:
     """
 
     MAX_QUEUE_SIZE: int = 256
-    #: Bounded live connections per process (HONEY-025). Durable alerting never depends on these.
+    #: Bounded live connections per process. Durable alerting never depends on these.
     MAX_SUBSCRIBERS: int = 500
     MAX_SUBSCRIBERS_PER_TENANT: int = 25
 
@@ -112,9 +112,7 @@ class EventBroadcaster:
         self._relay_thread: threading.Thread | None = None
         self._relay_stop = threading.Event()
 
-    # ------------------------------------------------------------------
     # Subscriber management (called from async context)
-    # ------------------------------------------------------------------
 
     def subscribe(self, tenant_id: int | None, queue: asyncio.Queue[dict[str, Any]]) -> int:
         """Register a subscriber and return its unique ID.
@@ -168,9 +166,7 @@ class EventBroadcaster:
                     sub_id, removed.tenant_id, len(self._subscribers),
                 )
 
-    # ------------------------------------------------------------------
     # Publishing (called from sync service threads)
-    # ------------------------------------------------------------------
 
     def publish(self, event_data: dict[str, Any], event_tenant_id: int) -> None:
         """Publish an event to all tenant-matched subscribers.
@@ -222,9 +218,7 @@ class EventBroadcaster:
         self._deliver_local(event, tenant_id)
         return True
 
-    # ------------------------------------------------------------------
     # Cluster relay (one thread per process, only when REDIS_URL is set)
-    # ------------------------------------------------------------------
 
     def start_relay(self) -> bool:
         from app.core import shared_state
@@ -309,9 +303,7 @@ class EventBroadcaster:
                     "Failed to deliver event to subscriber", exc_info=True,
                 )
 
-    # ------------------------------------------------------------------
     # Lifecycle & Graceful Shutdown
-    # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
         """Signal all subscribers to shut down and clear all subscriptions."""
@@ -342,9 +334,7 @@ class EventBroadcaster:
             self._loop = None
             self._is_shutting_down = False
 
-    # ------------------------------------------------------------------
     # Introspection
-    # ------------------------------------------------------------------
 
     @property
     def is_shutting_down(self) -> bool:
@@ -358,9 +348,7 @@ class EventBroadcaster:
             return len(self._subscribers)
 
 
-# ------------------------------------------------------------------
 # Module-level singleton
-# ------------------------------------------------------------------
 
 _broadcaster: EventBroadcaster | None = None
 _broadcaster_lock = threading.Lock()

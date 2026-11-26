@@ -38,11 +38,10 @@ def reset_broadcaster():
 
 
 def test_websocket_auth_success(client: TestClient, admin_a: User):
-    """Test WebSocket connects successfully with valid auth message."""
+    """WebSocket connects successfully with valid auth message."""
     jwt_token = make_token(admin_a)
     
     with client.websocket_connect("/api/v1/events/stream/ws") as websocket:
-        # Initial message authentication
         websocket.send_json({"type": "auth", "token": jwt_token})
         
         # Should receive auth_success
@@ -54,7 +53,7 @@ def test_websocket_auth_success(client: TestClient, admin_a: User):
 
 
 def test_websocket_auth_invalid(client: TestClient):
-    """Test WebSocket disconnects if auth message is invalid."""
+    """WebSocket disconnects if auth message is invalid."""
     with pytest.raises(Exception) as exc_info:
         with client.websocket_connect("/api/v1/events/stream/ws") as websocket:
             websocket.send_json({"type": "auth", "token": "invalid.token.here"})
@@ -66,10 +65,8 @@ def test_websocket_auth_invalid(client: TestClient):
 
 
 def test_websocket_auth_missing(client: TestClient):
-    """Test WebSocket disconnects if auth message is completely missing (timeout)."""
-    # The client websocket_connect will block, but we can't easily test timeout 
-    # natively with TestClient without mocking asyncio.wait_for. 
-    # Instead, send bad format:
+    """WebSocket disconnects if auth message is completely missing (timeout)."""
+    # TestClient cannot wait out the real auth timeout, so a malformed first message stands in.
     with pytest.raises(Exception) as exc_info:
         with client.websocket_connect("/api/v1/events/stream/ws") as websocket:
             websocket.send_json({"wrong": "format"})
@@ -82,7 +79,7 @@ def test_websocket_auth_missing(client: TestClient):
 
 @mock.patch("asyncio.wait_for")
 def test_sse_auth_success(mock_wait_for, client: TestClient, admin_a: User):
-    """Test SSE connects successfully with query param or header auth."""
+    """SSE connects successfully with query param or header auth."""
     # Force the SSE generator to exit immediately when it waits for an event, cleanly closing the coro
     def _cancel_and_close(coro, timeout=None):
         if hasattr(coro, "close"):
@@ -108,7 +105,7 @@ def test_sse_auth_success(mock_wait_for, client: TestClient, admin_a: User):
 
 
 def test_sse_auth_invalid(client: TestClient):
-    """Test SSE rejects invalid auth."""
+    """SSE rejects invalid auth."""
     response = client.get(
         "/api/v1/events/stream/sse?token=invalid.jwt",
     )
@@ -123,7 +120,7 @@ def test_tenant_isolation(
     token_a: HoneyToken, 
     token_b: HoneyToken
 ):
-    """Test Tenant A only receives events for Tenant A."""
+    """Tenant A only receives events for Tenant A."""
     jwt_a = make_token(admin_a)
     jwt_b = make_token(admin_b)
     
@@ -139,7 +136,6 @@ def test_tenant_isolation(
     with client.websocket_connect("/api/v1/events/stream/ws") as ws_a, \
          client.websocket_connect("/api/v1/events/stream/ws") as ws_b:
 
-        # Authenticate both
         ws_a.send_json({"type": "auth", "token": jwt_a})
         res_a = ws_a.receive_json()
         assert res_a == {"type": "auth_success"}
@@ -148,7 +144,6 @@ def test_tenant_isolation(
         res_b = ws_b.receive_json()
         assert res_b == {"type": "auth_success"}
 
-        # Fire event for Tenant A
         service.record_public_hit(
             token=token_a,
             ip_address="1.1.1.1",
@@ -156,7 +151,6 @@ def test_tenant_isolation(
             http_method="GET",
         )
 
-        # Fire event for Tenant B
         service.record_public_hit(
             token=token_b,
             ip_address="2.2.2.2",
@@ -183,7 +177,7 @@ def test_system_admin_receives_all(
     token_a: HoneyToken, 
     token_b: HoneyToken
 ):
-    """Test SYSTEM_ADMIN receives events from all tenants."""
+    """SYSTEM_ADMIN receives events from all tenants."""
     jwt_sys = make_token(system_admin)
     
     from app.repositories.detection_event import DetectionEventRepository
@@ -226,7 +220,7 @@ def test_broadcast_failure_does_not_rollback(
     token_a: HoneyToken, 
     caplog: pytest.LogCaptureFixture
 ):
-    """Test that if broadcast throws an exception, the event remains persisted."""
+    """If broadcast throws an exception, the event remains persisted."""
     from app.repositories.detection_event import DetectionEventRepository
     from app.repositories.honey_token import HoneyTokenRepository
     
@@ -236,7 +230,6 @@ def test_broadcast_failure_does_not_rollback(
         token_repo=HoneyTokenRepository(db_session),
     )
     
-    # Mock publish to throw an error
     with mock.patch("app.services.event_broadcaster.EventBroadcaster.publish", side_effect=ValueError("Simulated broker failure")):
         with caplog.at_level(logging.WARNING):
             event = service.record_public_hit(
@@ -250,37 +243,26 @@ def test_broadcast_failure_does_not_rollback(
     assert event.id is not None
     assert event.ip_address == "8.8.8.8"
     
-    # Ensure log captured the warning
     assert "Failed to broadcast detection event" in caplog.text
 
 
 def test_disconnect_cleanup(client: TestClient, admin_a: User):
-    """Test that when a client disconnects, their subscription is removed."""
+    """When a client disconnects, their subscription is removed."""
     jwt_token = make_token(admin_a)
     
     broadcaster = get_broadcaster()
     
-    # Connect
     with client.websocket_connect("/api/v1/events/stream/ws") as websocket:
         websocket.send_json({"type": "auth", "token": jwt_token})
         websocket.receive_json()
         assert broadcaster.subscriber_count == 1
         
-    # Disconnect
-    # FastAPI test client automatically handles disconnect on context manager exit,
-    # but the async finally block in our handler needs time to run.
-    # The subscriber count should eventually drop to 0.
-    
-    # NOTE: In test client environments, sometimes background tasks on context exit 
-    # take a tiny event loop tick to finish. 
-    # By forcing a ping or small sleep in real async we'd check, but test client blocks.
-    # However, since TestClient throws WebSocketDisconnect inside the endpoint, the 
-    # finally block executes immediately.
+    # TestClient raises WebSocketDisconnect inside the endpoint, so its finally block has run.
     assert broadcaster.subscriber_count == 0
 
 
 def test_websocket_db_pool_zero_checkout(monkeypatch):
-    """F-001: Test that active WebSocket streams do NOT hold checked-out connections in the pool."""
+    """Active WebSocket streams do NOT hold checked-out connections in the pool."""
     from sqlalchemy import create_engine
     from sqlalchemy.pool import QueuePool
     from sqlalchemy.orm import sessionmaker
@@ -359,7 +341,7 @@ def test_websocket_db_pool_zero_checkout(monkeypatch):
 
 
 def test_websocket_rejection_inactive_user(client: TestClient, admin_a: User, db_session: Session):
-    """Test WebSocket disconnects if user is inactive at connection time."""
+    """WebSocket disconnects if user is inactive at connection time."""
     admin_a.is_active = False
     db_session.commit()
     jwt_token = make_token(admin_a)
@@ -373,7 +355,7 @@ def test_websocket_rejection_inactive_user(client: TestClient, admin_a: User, db
 
 
 def test_websocket_rejection_inactive_tenant(client: TestClient, admin_a: User, tenant_a, db_session: Session):
-    """Test WebSocket disconnects if tenant is inactive at connection time."""
+    """WebSocket disconnects if tenant is inactive at connection time."""
     tenant_a.is_active = False
     db_session.commit()
     jwt_token = make_token(admin_a)
@@ -387,7 +369,7 @@ def test_websocket_rejection_inactive_tenant(client: TestClient, admin_a: User, 
 
 
 def test_sse_rejection_inactive_user(client: TestClient, admin_a: User, db_session: Session):
-    """Test SSE rejects inactive user with 401."""
+    """SSE rejects inactive user with 401."""
     admin_a.is_active = False
     db_session.commit()
     jwt_token = make_token(admin_a)
@@ -399,7 +381,7 @@ def test_sse_rejection_inactive_user(client: TestClient, admin_a: User, db_sessi
 
 
 def test_sse_rejection_inactive_tenant(client: TestClient, admin_a: User, tenant_a, db_session: Session):
-    """Test SSE rejects inactive tenant with 401."""
+    """SSE rejects inactive tenant with 401."""
     tenant_a.is_active = False
     db_session.commit()
     jwt_token = make_token(admin_a)
@@ -413,7 +395,7 @@ def test_sse_rejection_inactive_tenant(client: TestClient, admin_a: User, tenant
 def test_websocket_mid_connection_user_deactivation(
     client: TestClient, admin_a: User, db_session: Session, monkeypatch
 ):
-    """F-008: Test that mid-connection user deactivation terminates WebSocket with 1008."""
+    """Mid-connection user deactivation terminates WebSocket with 1008."""
     import app.api.v1.events_stream as es_mod
     monkeypatch.setattr(es_mod, "REVALIDATION_INTERVAL_SECONDS", 0.05)
 
@@ -437,7 +419,7 @@ def test_websocket_mid_connection_user_deactivation(
 def test_websocket_mid_connection_token_revocation(
     client: TestClient, admin_a: User, db_session: Session, monkeypatch
 ):
-    """F-008: Test that token version bump (revocation) terminates WebSocket with 1008."""
+    """Token version bump (revocation) terminates WebSocket with 1008."""
     import app.api.v1.events_stream as es_mod
     monkeypatch.setattr(es_mod, "REVALIDATION_INTERVAL_SECONDS", 0.05)
 
@@ -460,7 +442,7 @@ def test_websocket_mid_connection_token_revocation(
 def test_websocket_mid_connection_tenant_deactivation(
     client: TestClient, admin_a: User, tenant_a, db_session: Session, monkeypatch
 ):
-    """F-008: Test that tenant deactivation terminates WebSocket with 1008."""
+    """Tenant deactivation terminates WebSocket with 1008."""
     import app.api.v1.events_stream as es_mod
     monkeypatch.setattr(es_mod, "REVALIDATION_INTERVAL_SECONDS", 0.05)
 
@@ -481,7 +463,7 @@ def test_websocket_mid_connection_tenant_deactivation(
 
 
 def test_broadcaster_queue_overflow_drops_oldest(caplog: pytest.LogCaptureFixture):
-    """Test that when a subscriber queue overflows, oldest events are dropped, retaining newest."""
+    """When a subscriber queue overflows, oldest events are dropped, retaining newest."""
     import asyncio
     from app.services.event_broadcaster import _safe_put
 
@@ -504,7 +486,7 @@ def test_broadcaster_queue_overflow_drops_oldest(caplog: pytest.LogCaptureFixtur
 
 
 def test_broadcaster_graceful_shutdown():
-    """F-022: Test that shutdown enqueues shutdown event to subscribers and marks shutting down."""
+    """Shutdown enqueues shutdown event to subscribers and marks shutting down."""
     import asyncio
     from app.services.event_broadcaster import EventBroadcaster
 

@@ -72,7 +72,7 @@ class ProjectService(BaseService):
             except ForbiddenError:
                 raise TenantNotFoundError(f"Tenant '{tenant_slug}' not found")
 
-            # HONEY-013: uniqueness is per tenant (matches uq_projects_tenant_id). A global check
+            # Uniqueness is per tenant (matches uq_projects_tenant_id). A global check
             # told one tenant which domains other tenants protect.
             existing_project = self.project_repo.get_by_domain(domain, tenant_id=tenant.id)
             if existing_project:

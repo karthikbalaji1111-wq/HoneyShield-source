@@ -1,7 +1,7 @@
 """Public ingestion API routes with forensic abuse control and trusted IP extraction.
 
-Evidence guarantee (HONEY-001)
-------------------------------
+Evidence guarantee
+------------------
 A hit on a *valid* token is persisted regardless of how saturated the shared
 admission limiter is. Noise from invalid tokens, other IPs, or a full key table
 can therefore never blind detection. Repeats from the same (IP, token) beyond a

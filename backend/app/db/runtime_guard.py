@@ -1,4 +1,4 @@
-"""Fail-closed check that the API is not running with a privileged database role (HONEY-002)."""
+"""Fail-closed check that the API is not running with a privileged database role."""
 from __future__ import annotations
 
 import logging

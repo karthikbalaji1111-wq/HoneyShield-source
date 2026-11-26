@@ -1,4 +1,4 @@
-"""Phase 9: tamper-evident evidence chain, checkpoints and write-once export.
+"""Tamper-evident evidence chain, checkpoints and write-once export.
 
 Tampering is simulated with Core SQL, which bypasses the ORM immutability hook (SQLite has no
 triggers). On PostgreSQL the runtime role cannot do any of this at all; these tests prove that

@@ -135,7 +135,7 @@ class AuditLogService(BaseService):
 
 
 def record_independently(session: Session, **fields: Any) -> None:
-    """Write one security audit record in its OWN session and commit only that (HONEY-020).
+    """Write one security audit record in its OWN session and commit only that.
 
     Authorization helpers run in the middle of a caller's unit of work; committing the
     caller's session there would silently persist half-finished changes. Never raises.

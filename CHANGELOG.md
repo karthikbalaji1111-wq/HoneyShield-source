@@ -3,6 +3,70 @@
 Versions follow [Semantic Versioning](https://semver.org). The Helm chart's `appVersion` and the
 release tag (`vX.Y.Z`) always match; the release workflow refuses a tag that does not.
 
+## 1.4.0 — 2026-11-26
+
+### Added
+* **DNS decoys** (`DNS`): a host name in a zone delegated to HoneyShield. Any lookup of it, or of any
+  name ending in it, becomes a HIGH event with the resolver's address, the EDNS client subnet when
+  sent, the query type and the time. Nothing is needed where it is planted. A new `dns` service
+  (Compose profile `dns`, Helm `dnsDecoys`) answers for the zone. It holds no database credentials,
+  spools every decoy lookup before delivering it signed to the backend, refuses other zones, gives
+  the same answer for every name and rate-limits each source. See `docs/dns-tokens.md`.
+* **Cloud canaries** (`AWS_KEY`): real AWS access keys that can do nothing. A new `cloud-canary`
+  service (Compose profile `cloud-canary`, Helm `cloudCanary`) creates each key's IAM user, with a
+  deny-all policy and a deny-all permissions boundary, and reads CloudTrail event history in every
+  watched region. It records each use of a key as a CRITICAL event with the new provenance
+  `CLOUD_AUDIT`, and deletes the IAM user when the decoy is revoked or rotated. See
+  `docs/cloud-canaries.md`.
+* `GET /api/v1/honey-tokens/types`: the decoy types this installation can watch. The console
+  disables the others.
+* Watchdog checks `DNS decoys` and `Cloud canaries`: the listener's heartbeat, the worker's status,
+  AWS refusals and unreadable regions.
+* **Document decoys** (`DOCUMENT`): a Word file that reports being opened. It loads a linked 1-pixel
+  picture from the pixel route, so opening it in Word records a HIGH event with Word's user agent.
+  There are no macros or fields, and the same decoy always gives the same file. It needs
+  `PUBLIC_INGEST_BASE_URL`. See `docs/document-decoys.md`.
+* **Bait files**: `GET /api/v1/honey-tokens/{decoy_id}/files/{kind}` returns a decoy already inside
+  the file intruders look for:
+  * AWS key: `~/.aws/credentials` and `.env`;
+  * DNS: kubeconfig, SSH config and `.env`, each with its own label in front of the host name, so a
+    hit says which file was used;
+  * API key: `.env`;
+  * Document: the Word file.
+
+  Only administrators can download them, and every download is audited
+  (`HONEY_TOKEN_FILE_DOWNLOADED`). Token listings name the files available for each decoy (`files`).
+* **MITRE ATT&CK labels**: events (`attack` in the API and the console's event panel) and every
+  alert name the techniques the decoy type points to, for example T1552.001 and T1078.004 for an
+  AWS key. They appear in the webhook and PagerDuty payloads, Slack and email text, and CEF `cs6`.
+* **PagerDuty alerts** (`PAGERDUTY`, `pagerduty://<integration key>` or `pagerduty+eu://…`): Events
+  API v2 triggers with one dedup key per event. Delivery goes through the webhook transport's SSRF
+  checks; 400 is permanent, while 429 and 5xx are retried.
+
+### Changed
+* **Console:** a white, neutral design. The page, app bar and sidebar are white, separated by
+  hairlines, instead of a beige canvas with a graphite frame. Primary buttons are near-black, one
+  blue is used for links and focus, honey appears only in the logo, and dark mode is neutral
+  black. No page, element id or behaviour changed.
+* **Dependencies:** FastAPI 0.165.0, Pydantic 2.14.4, SQLAlchemy 2.1.9 and other patch updates;
+  refreshed PostgreSQL 16.16 and nginx 1.30.7 base images; CodeQL action 4.39.4.
+
+### Fixed
+* Opening the console signed out, or signing out, showed an "Authorization header" error toast.
+  Resetting the events filter reloaded events with no session.
+
+### Upgrade notes
+* `~/honeyshield/install.sh --upgrade --version 1.4.0` (or `<dir>/install.sh --upgrade --version
+  1.4.0` for an installation made with `--dir`).
+* Migration `20261122_01` adds `CLOUD_AUDIT` to the allowed event sources and a partial unique index
+  on CloudTrail event IDs. It runs online: the constraint is re-added `NOT VALID` and then
+  validated, and the index is built `CONCURRENTLY`.
+* Both new services are off unless listed in `COMPOSE_PROFILES` (or enabled in Helm). Existing
+  installations behave exactly as before.
+* Webhook payloads gain a field, `data.attack`. Receivers that reject unknown fields need updating.
+  The envelope stays at `version` 1 because the change only adds a field.
+* Document decoys, bait files, ATT&CK labels and PagerDuty need no migration or new configuration.
+
 ## 1.3.3 — 2026-11-21
 
 ### Upgrade notes

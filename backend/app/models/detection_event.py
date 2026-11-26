@@ -24,6 +24,11 @@ class DetectionEvent(ImmutableBaseModel):
         Index("uq_detection_events_public_request", "idempotency_key", unique=True,
               postgresql_where=text("source = 'PUBLIC_INGEST' AND idempotency_key IS NOT NULL"),
               sqlite_where=text("source = 'PUBLIC_INGEST' AND idempotency_key IS NOT NULL")),
+        # One event per CloudTrail event id (migration 20261122_01): the cloud-canary worker reads
+        # every window more than once because CloudTrail delivers late.
+        Index("uq_detection_events_cloud_event", "idempotency_key", unique=True,
+              postgresql_where=text("source = 'CLOUD_AUDIT' AND idempotency_key IS NOT NULL"),
+              sqlite_where=text("source = 'CLOUD_AUDIT' AND idempotency_key IS NOT NULL")),
         # A manually entered event must always name the user who entered it.
         CheckConstraint(
             "source <> 'MANUAL' OR created_by_user_id IS NOT NULL",
@@ -38,7 +43,7 @@ class DetectionEvent(ImmutableBaseModel):
         UniqueConstraint("integration_credential_id", "idempotency_key", name="uq_detection_events_integration_credential_id"),
     )
 
-    # Provenance (HONEY-006). Deliberately no default: every insert path must state
+    # Provenance. Deliberately no default: every insert path must state
     # where the evidence came from, so a forgotten label fails instead of being guessed.
     source: Mapped[EventSource] = mapped_column(
         Enum(EventSource, native_enum=False, validate_strings=True, create_constraint=True,
@@ -47,7 +52,7 @@ class DetectionEvent(ImmutableBaseModel):
         index=True,
     )
     # No ON DELETE action on purpose: SET NULL would be an UPDATE that the immutability
-    # trigger rejects (see HONEY-010). Users are deactivated, not deleted.
+    # trigger rejects. Users are deactivated, not deleted.
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("users.id"), nullable=True
     )
@@ -82,7 +87,6 @@ class DetectionEvent(ImmutableBaseModel):
         "HoneyToken",
         back_populates="detection_events",
     )
-
 
 
 # SQLite (tests, development): fill tenant_id after insert, like the PostgreSQL trigger does.

@@ -29,7 +29,7 @@ from tests.conftest import auth_headers
 
 
 class TestHoneyTokenGenerationAndIngestion:
-    """Test every supported honey token type end-to-end from generation to ingestion."""
+    """Every supported honey token type end-to-end from generation to ingestion."""
 
     def test_api_key_generator_and_ingestion(self, client, db_session: Session, admin_a: User, project_a: Project):
         """API_KEY: generate -> triggers via /collect and /t -> records DetectionEvent in DB."""
@@ -45,11 +45,9 @@ class TestHoneyTokenGenerationAndIngestion:
         assert token_value
         assert data["token_type"] == "API_KEY"
 
-        # 1. Trigger via POST /collect/{token_value}
         collect_resp = client.post(f"/collect/{token_value}")
         assert collect_resp.status_code == 204
 
-        # Verify event in DB
         db_session.expire_all()
         token = db_session.query(HoneyToken).filter_by(token_value=token_value).one()
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token.id).all()
@@ -57,7 +55,6 @@ class TestHoneyTokenGenerationAndIngestion:
         assert events[0].http_method == "POST"
         assert events[0].request_path == f"/collect/{token_value}"
 
-        # 2. Trigger via GET /t/{token_value}
         t_resp = client.get(f"/t/{token_value}")
         assert t_resp.status_code == 204
 
@@ -81,11 +78,9 @@ class TestHoneyTokenGenerationAndIngestion:
         assert "metadata" in data
         assert data["metadata"]["path"] == f"/t/{token_value}"
 
-        # Trigger via GET /t/{token_value}
         trigger_resp = client.get(f"/t/{token_value}")
         assert trigger_resp.status_code == 204
 
-        # Verify event in DB
         db_session.expire_all()
         token = db_session.query(HoneyToken).filter_by(token_value=token_value).one()
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token.id).all()
@@ -109,21 +104,17 @@ class TestHoneyTokenGenerationAndIngestion:
         assert "metadata" in data
         assert data["metadata"]["pixel_path"] == f"/px/{token_value}.gif"
 
-        # Trigger via GET /px/{token_value}.gif
         px_resp = client.get(f"/px/{token_value}.gif")
         assert px_resp.status_code == 200
         assert px_resp.headers["content-type"] == "image/gif"
         assert len(px_resp.content) == 43  # 1x1 transparent GIF
 
-        # Verify event in DB
         db_session.expire_all()
         token = db_session.query(HoneyToken).filter_by(token_value=token_value).one()
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token.id).all()
         assert len(events) == 1
         assert events[0].http_method == "GET"
         assert events[0].request_path == f"/px/{token_value}.gif"
-
-
 
     def test_link_generator_and_ingestion(self, client, db_session: Session, admin_a: User, project_a: Project):
         """LINK: generate -> triggers via /t/{token_value} -> records DetectionEvent."""
@@ -142,11 +133,9 @@ class TestHoneyTokenGenerationAndIngestion:
         assert data["metadata"]["path"] == f"/t/{token_value}"
         assert "<a href=" in data["metadata"]["html_tag"]
 
-        # Trigger via GET /t/{token_value}
         link_resp = client.get(f"/t/{token_value}")
         assert link_resp.status_code == 204
 
-        # Verify event in DB
         db_session.expire_all()
         token = db_session.query(HoneyToken).filter_by(token_value=token_value).one()
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token.id).all()
@@ -175,7 +164,6 @@ class TestHoneyTokenGenerationAndIngestion:
         collect_resp = client.post(f"/collect/{token_value}")
         assert collect_resp.status_code == 204
 
-        # Verify event in DB
         db_session.expire_all()
         token = db_session.query(HoneyToken).filter_by(token_value=token_value).one()
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token.id).all()
@@ -184,7 +172,7 @@ class TestHoneyTokenGenerationAndIngestion:
 
 
 class TestHoneyTokenLifecycle:
-    """Test token revocation, rotation, inactive triggering, and duplicate collision handling."""
+    """Token revocation, rotation, inactive triggering, and duplicate collision handling."""
 
     def _create(self, client, headers, project, token_type="URL", **extra):
         resp = client.post("/api/v1/honey-tokens", json={"project_domain": project.domain,
@@ -244,7 +232,7 @@ class TestHoneyTokenLifecycle:
 
     def test_tenant_admin_cannot_choose_token_values(self, client, db_session, admin_a: User, project_a: Project,
                                                      token_b):
-        """HONEY-012: a chosen value would make uniqueness a cross-tenant oracle.
+        """A chosen value would make uniqueness a cross-tenant oracle.
 
         Submitting another tenant's real value and an unused value must look identical.
         """

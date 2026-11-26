@@ -1,11 +1,11 @@
-"""Comprehensive regression tests for Phase 7: Input Security & Rate Limits.
+"""Input security and rate limits.
 
 Covers:
-  - F-010: Request body-size limits (normal, oversized Content-Length, streaming/chunked, 413 format)
-  - F-011: API-wide rate limiting (authenticated, public, health exempt, 429 Retry-After, reset)
-  - F-012: HoneyToken ingestion abuse control (valid, invalid, revoked, per-token isolation, 429)
-  - F-013: Forensic request header security (allowlist, credential stripping, deterministic truncation, size cap)
-  - F-028: IP validation and trusted-proxy model (IPv4/IPv6, malformed reject, spoofing resistance)
+  - Request body-size limits (normal, oversized Content-Length, streaming/chunked, 413 format)
+  - API-wide rate limiting (authenticated, public, health exempt, 429 Retry-After, reset)
+  - HoneyToken ingestion abuse control (valid, invalid, revoked, per-token isolation, 429)
+  - Forensic request header security (allowlist, credential stripping, deterministic truncation, size cap)
+  - IP validation and trusted-proxy model (IPv4/IPv6, malformed reject, spoofing resistance)
 """
 from __future__ import annotations
 
@@ -22,10 +22,6 @@ from app.core.rate_limit import api_limiter, ingestion_limiter, login_limiter, r
 from app.models.detection_event import DetectionEvent
 from app.models.enums import HoneyTokenType
 
-
-# ---------------------------------------------------------------------------
-# Phase 7B: Request Body Size Limits (F-010)
-# ---------------------------------------------------------------------------
 
 class TestRequestBodySizeLimits:
     def test_normal_request_within_limit_accepted(self, client, admin_headers_a):
@@ -61,7 +57,6 @@ class TestRequestBodySizeLimits:
         settings = get_settings()
         max_bytes = settings.max_request_body_bytes
 
-        # Generate payload larger than max_bytes
         oversized_payload = b"A" * (max_bytes + 2048)
 
         # Without Content-Length or with exact large payload
@@ -84,10 +79,6 @@ class TestRequestBodySizeLimits:
         )
         assert resp.status_code == 201
 
-
-# ---------------------------------------------------------------------------
-# Phase 7C: API-Wide Rate Limiting (F-011)
-# ---------------------------------------------------------------------------
 
 class TestApiRateLimiting:
     def test_authenticated_traffic_rate_limited(self, client, admin_headers_a):
@@ -219,17 +210,12 @@ class TestApiRateLimiting:
         assert len(limiter._counts) <= 10
 
 
-# ---------------------------------------------------------------------------
-# Phase 7D: Public HoneyToken Ingestion Rate Limiting (F-012)
-# ---------------------------------------------------------------------------
-
 class TestHoneyTokenIngestionRateLimiting:
     def test_valid_token_triggers_detection_event(self, client, token_a, db_session):
         """Under normal volume, a valid token triggers an event and returns 204."""
         resp = client.get(f"/t/{token_a.token_value}")
         assert resp.status_code == 204
 
-        # Verify event was recorded in DB
         events = db_session.query(DetectionEvent).filter_by(honey_token_id=token_a.id).all()
         assert len(events) >= 1
 
@@ -299,14 +285,14 @@ class TestHoneyTokenIngestionRateLimiting:
         assert db_session.query(DetectionEvent).filter_by(honey_token_id=token_a.id).count() == 1
 
     def test_valid_hit_recorded_when_limiter_key_table_is_full(self, client, token_a, db_session):
-        """HONEY-001: attacker noise filling the shared key table cannot blind detection."""
+        """Attacker noise filling the shared key table cannot blind detection."""
         for i in range(8192):
             ingestion_limiter.check_and_increment(f"ingest_ip:noise{i}", 120, 10**9)
         client.get(f"/t/{token_a.token_value}", headers={"X-Forwarded-For": "203.0.113.50"})
         assert db_session.query(DetectionEvent).filter_by(honey_token_id=token_a.id).count() == 1
 
     def test_valid_hit_recorded_when_global_budget_is_exhausted(self, client, token_a, db_session):
-        """HONEY-001: exhausting the global per-minute budget cannot blind detection."""
+        """Exhausting the global per-minute budget cannot blind detection."""
         budget = get_settings().rate_limit_global_per_minute
         for i in range(budget):
             ingestion_limiter.check_and_increment(f"ingest_ip:n{i % 50}", 10**9, budget)
@@ -334,10 +320,6 @@ class TestHoneyTokenIngestionRateLimiting:
             client.get("/t/" + "a" * 20)
             lookup.assert_called_once()
 
-
-# ---------------------------------------------------------------------------
-# Phase 7E: Request Header Security & Sanitization (F-013)
-# ---------------------------------------------------------------------------
 
 class TestRequestHeaderSecurity:
     def test_allowed_forensic_headers_retained(self, client, token_a, db_session):
@@ -412,10 +394,6 @@ class TestRequestHeaderSecurity:
         assert len(encoded) <= 512
 
 
-# ---------------------------------------------------------------------------
-# Phase 7F: IP Validation & Trusted Proxy Model (F-028)
-# ---------------------------------------------------------------------------
-
 class TestIPValidationAndTrustModel:
     def test_valid_ipv4_and_ipv6_accepted(self):
         """Valid IPv4 and IPv6 strings must normalize correctly."""
@@ -483,10 +461,6 @@ class TestIPValidationAndTrustModel:
             event = db_session.query(DetectionEvent).filter_by(honey_token_id=token_a.id).order_by(DetectionEvent.id.desc()).first()
             assert event.ip_address == "127.0.0.1"
 
-
-# ---------------------------------------------------------------------------
-# Sliding-window admission: no double budget across a window boundary
-# ---------------------------------------------------------------------------
 
 class TestSlidingWindow:
     def _limiter(self, now):

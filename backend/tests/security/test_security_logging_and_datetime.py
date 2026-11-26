@@ -1,4 +1,4 @@
-"""Phase 8 tests: Security logging, audit event taxonomy, and datetime hardening."""
+"""Security logging, audit event taxonomy, and datetime hardening."""
 from __future__ import annotations
 
 import ast
@@ -23,10 +23,6 @@ from app.repositories.audit_log import AuditLogRepository
 from app.services.audit_log import sanitize_audit_metadata
 from tests.conftest import auth_headers
 
-
-# ===========================================================================
-# 1. DATETIME HARDENING (F-027)
-# ===========================================================================
 
 class TestDatetimeHardening:
     def test_no_datetime_utcnow_in_app_code(self) -> None:
@@ -95,10 +91,6 @@ class TestDatetimeHardening:
         diff = exp_dt - now_utc
         assert diff.total_seconds() > 0
 
-
-# ===========================================================================
-# 2. AUTHENTICATION SECURITY AUDIT EVENTS (F-031)
-# ===========================================================================
 
 class TestAuthenticationAuditEvents:
     def test_login_success_creates_audit_event(
@@ -233,10 +225,6 @@ class TestAuthenticationAuditEvents:
         assert log.event_metadata["ip_address"] == "198.51.100.88"
 
 
-# ===========================================================================
-# 3. USER LIFECYCLE SECURITY AUDIT EVENTS
-# ===========================================================================
-
 class TestUserLifecycleAuditEvents:
     def test_user_creation_audit_log(
         self,
@@ -332,10 +320,6 @@ class TestUserLifecycleAuditEvents:
         assert log.tenant_id == tenant_a.id
         assert log.severity == "WARNING"
 
-
-# ===========================================================================
-# 4. AUTHORIZATION / TENANT ACCESS DENIED SECURITY EVENTS
-# ===========================================================================
 
 class TestAuthorizationDenialAuditEvents:
     def test_cross_tenant_access_denied_records_audit_event(
@@ -441,10 +425,6 @@ class TestAuthorizationDenialAuditEvents:
         assert log.actor_user_id == user_a.id
 
 
-# ===========================================================================
-# 5. SECRET LEAKAGE REVIEW & METADATA SANITIZATION
-# ===========================================================================
-
 class TestSecretLeakageProtection:
     def test_sanitize_audit_metadata_strips_credentials(self) -> None:
         """sanitize_audit_metadata must remove passwords, raw JWTs, auth headers, and tokens."""
@@ -486,10 +466,6 @@ class TestSecretLeakageProtection:
         assert cleaned["role"] == "TENANT_ADMIN"
         assert cleaned["nested"] == {"safe_info": "ok"}
 
-
-# ===========================================================================
-# 6. AUDIT LOG IMMUTABILITY
-# ===========================================================================
 
 class TestAuditLogImmutability:
     def test_security_audit_log_cannot_be_deleted(self, db_session: Session) -> None:

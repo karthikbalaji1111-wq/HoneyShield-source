@@ -1,4 +1,4 @@
-"""Regression tests for HONEY-009: top-attackers ranked only the first N IPs in lexical order."""
+"""Top attackers are ranked over every IP, not just the first N in lexical order."""
 from __future__ import annotations
 
 from datetime import datetime, timezone

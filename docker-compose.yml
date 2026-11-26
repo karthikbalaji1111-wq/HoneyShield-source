@@ -21,7 +21,7 @@ x-app-env: &app-env
   POSTGRES_HOST: postgres
   POSTGRES_PORT: "5432"
   POSTGRES_DB: ${POSTGRES_DB:?Provide POSTGRES_DB}
-  # Runtime identity: least-privilege role (HONEY-002). Never the bootstrap superuser.
+  # Runtime identity: least-privilege role. Never the bootstrap superuser.
   POSTGRES_USER: ${HS_APP_DB_USER:-honeyshield_app}
   POSTGRES_PASSWORD: ${HS_APP_DB_PASSWORD:?Provide HS_APP_DB_PASSWORD}
   POSTGRES_APP_USER: ${HS_APP_DB_USER:-honeyshield_app}
@@ -31,7 +31,7 @@ x-app-env: &app-env
   MFA_REQUIRED_ROLES: ${MFA_REQUIRED_ROLES:-}
   PUBLIC_INGEST_BASE_URL: https://${HS_INGEST_HOST:?Provide HS_INGEST_HOST}
   CONTROL_PLANE_HOSTNAMES: ${HS_CONTROL_HOST:?Provide HS_CONTROL_HOST}
-  # Only the nginx container's fixed address may set X-Forwarded-For (HONEY-005).
+  # Only the nginx container's fixed address may set X-Forwarded-For.
   TRUSTED_PROXIES: ${HS_NGINX_IP:-172.28.0.10}
   CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
   SECURITY_HEADERS_HSTS_ENABLED: ${SECURITY_HEADERS_HSTS_ENABLED:-true}
@@ -55,7 +55,7 @@ x-app-env: &app-env
   OIDC_REQUIRE_EMAIL_VERIFIED: ${OIDC_REQUIRE_EMAIL_VERIFIED:-true}
   OIDC_MFA: ${OIDC_MFA:-amr_claim}
   OIDC_CA_FILE: ${OIDC_CA_FILE:-}  # only for an IdP with a private CA (mount the file)
-  # Shared rate limits + live-stream fan-out across backend replicas (HONEY-026).
+  # Shared rate limits + live-stream fan-out across backend replicas.
   REDIS_URL: redis://:${REDIS_PASSWORD:?Provide REDIS_PASSWORD (openssl rand -hex 32)}@redis:6379/0
   ENFORCE_DB_LEAST_PRIVILEGE: ${ENFORCE_DB_LEAST_PRIVILEGE:-true}
   # Decoy URL paths (docs/decoy-paths.md): choose your own so decoys do not look like HoneyShield.
@@ -68,6 +68,10 @@ x-app-env: &app-env
   # Passkeys are bound to this host name (default: HS_CONTROL_HOST).
   WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
   WEBAUTHN_ORIGINS: ${WEBAUTHN_ORIGINS:-}
+  # DNS decoys (docs/dns-tokens.md) and AWS key decoys (docs/cloud-canaries.md). Each needs its own
+  # service: add dns and/or cloud-canary to COMPOSE_PROFILES in the env file.
+  DNS_TOKEN_ZONE: ${DNS_TOKEN_ZONE:-}
+  AWS_CANARY_ENABLED: ${AWS_CANARY_ENABLED:-false}
 
 # S3 Object Lock bucket for checkpoints and retention archives. Unset bucket: local volumes only.
 x-s3-env: &s3-env
@@ -116,6 +120,8 @@ volumes:
   evidence_archive: {}
   # Decoy hits the edge captured while the backend could not record them (replayed by ingest-replay).
   ingest_spool: {}
+  # DNS decoy hits waiting for the backend (dns service).
+  dns_spool: {}
 
 services:
   postgres:
@@ -169,7 +175,7 @@ services:
     command: ["sh", "-c", "alembic upgrade head && python -m app.db.privileges grant"]
     environment:
       <<: *app-env
-      # Schema owner, used only here (HONEY-002).
+      # Schema owner, used only here.
       POSTGRES_MIGRATION_USER: ${HS_OWNER_DB_USER:-honeyshield_owner}
       POSTGRES_MIGRATION_PASSWORD: ${HS_OWNER_DB_PASSWORD:?Provide HS_OWNER_DB_PASSWORD}
     restart: "no"
@@ -200,7 +206,7 @@ services:
       timeout: 6s
       retries: 5
       start_period: 15s
-    # Replicas share rate limits and the live stream through Redis (HONEY-026); nginx spreads
+    # Replicas share rate limits and the live stream through Redis; nginx spreads
     # requests over every replica via Docker DNS. Each replica runs one uvicorn worker.
     deploy:
       replicas: ${HS_BACKEND_REPLICAS:-2}
@@ -324,6 +330,72 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    <<: *hardening
+
+  dns:
+    # Authoritative name server for DNS decoys (app/workers/dns_listener.py, docs/dns-tokens.md),
+    # started when COMPOSE_PROFILES includes dns. No database credentials: every decoy lookup is
+    # spooled to its own volume, then sent signed to the backend's internal endpoint.
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.dns_listener"]
+    profiles: ["dns"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DNS_TOKEN_ZONE: ${DNS_TOKEN_ZONE:-}
+      DNS_ANSWER_IPV4: ${DNS_ANSWER_IPV4:-}
+      DNS_ANSWER_IPV6: ${DNS_ANSWER_IPV6:-}
+      DNS_NAMESERVERS: ${DNS_NAMESERVERS:-}
+      DNS_TTL: ${DNS_TTL:-30}
+      DNS_LISTEN_PORT: "5353"
+      HS_DNS_HITS_URL: http://backend:8000/internal/v1/dns-hits
+      HS_DNS_SPOOL: /var/spool/honeyshield-dns/hits.jsonl
+      INTEGRATION_SIGNING_KEY: ${INTEGRATION_SIGNING_KEY:?Provide INTEGRATION_SIGNING_KEY (openssl rand -hex 32)}
+    ports:
+      # Port 53 on the host. On Ubuntu, systemd-resolved already listens on 127.0.0.53:53: set
+      # HS_DNS_BIND to the server's own address (docs/dns-tokens.md, "Port 53").
+      - "${HS_DNS_BIND:-0.0.0.0}:${HS_DNS_PORT:-53}:5353/udp"
+      - "${HS_DNS_BIND:-0.0.0.0}:${HS_DNS_PORT:-53}:5353/tcp"
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.5
+    networks:
+      - public_net
+      - internal_net
+    volumes:
+      - dns_spool:/var/spool/honeyshield-dns
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.workers.dns_listener", "--check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    <<: *hardening
+
+  cloud-canary:
+    # Creates AWS key decoys and reads CloudTrail for their use (app/workers/cloud_canary.py,
+    # docs/cloud-canaries.md), started when COMPOSE_PROFILES includes cloud-canary. The only service
+    # with AWS credentials; its IAM policy reaches nothing but the canary users and CloudTrail.
+    image: ${HS_IMAGE_REGISTRY:-}honeyshield-backend:${HS_IMAGE_TAG:-local}
+    command: ["python", "-m", "app.workers.cloud_canary"]
+    profiles: ["cloud-canary"]
+    environment:
+      <<: *app-env
+      AWS_CANARY_ACCESS_KEY_ID: ${AWS_CANARY_ACCESS_KEY_ID:-}
+      AWS_CANARY_SECRET_ACCESS_KEY: ${AWS_CANARY_SECRET_ACCESS_KEY:-}
+      AWS_CANARY_IAM_PATH: ${AWS_CANARY_IAM_PATH:-/svc/}
+      AWS_CANARY_REGIONS: ${AWS_CANARY_REGIONS:-}
+      AWS_CANARY_PERMISSIONS_BOUNDARY: ${AWS_CANARY_PERMISSIONS_BOUNDARY:-}
+      AWS_CANARY_POLL_SECONDS: ${AWS_CANARY_POLL_SECONDS:-300}
+      AWS_CANARY_LOOKBACK_MINUTES: ${AWS_CANARY_LOOKBACK_MINUTES:-30}
+    restart: unless-stopped
+    mem_limit: 192m
+    cpus: 0.5
+    networks:
+      - internal_net
+      - egress_net   # AWS IAM, STS and CloudTrail APIs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 20s
     <<: *hardening
 
   watchdog:

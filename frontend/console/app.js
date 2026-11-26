@@ -1005,11 +1005,25 @@ async function selectProject(p) {
   $("#token-panel").hidden = false;
   $("#tok-project").textContent = p.domain;
   $("#artifact").hidden = true;
-  await loadTokens();
+  await Promise.all([loadTokens(), markAvailableTypes()]);
 }
 
 const DECOY_TYPES = { URL: "Hidden URL", LINK: "Hidden link", PIXEL: "Tracking pixel",
-                      FORM_FIELD: "Form honeypot", API_KEY: "Fake API key" };
+                      FORM_FIELD: "Form honeypot", API_KEY: "Fake API key", DNS: "DNS host name",
+                      AWS_KEY: "AWS access key", DOCUMENT: "Word document" };
+
+// DNS and AWS key decoys need a service of their own; options this installation cannot watch are
+// disabled (the server refuses them anyway) and say why.
+async function markAvailableTypes() {
+  if (state.decoyTypes) return;
+  try { state.decoyTypes = (await api("GET", "/api/v1/honey-tokens/types")).types; } catch { return; }
+  for (const opt of $("#generate-form [name=token_type]").options) {
+    if (state.decoyTypes[opt.value] === false) {
+      opt.disabled = true;
+      if (!opt.textContent.endsWith("(not set up)")) opt.textContent += " (not set up)";
+    }
+  }
+}
 
 async function loadTokens() {
   const tokens = await api("GET", `/api/v1/honey-tokens?project_domain=${encodeURIComponent(state.project.domain)}&active_only=false&limit=100`);
@@ -1040,6 +1054,7 @@ async function loadTokens() {
 
 $("#generate-form [name=token_type]").addEventListener("change", (e) => {
   $("#generate-form [name=provider_style]").hidden = e.target.value !== "API_KEY";
+  $("#generate-form [name=template]").hidden = e.target.value !== "DOCUMENT";
 });
 
 const GUIDANCE = {
@@ -1048,6 +1063,9 @@ const GUIDANCE = {
   PIXEL: "Embed only in decoy documents and decoy emails, never in normal web pages: every viewer would trigger it. Mail clients that pre-fetch images can trigger it.",
   FORM_FIELD: "Insert the snippet inside protected forms and check the field server-side with the HoneyShield hook; a non-empty value means a bot filled it. Requires an integration credential.",
   API_KEY: "Plant the key in decoy config files and repositories. Detection needs the HoneyShield hook in your authentication middleware. Use against third-party APIs is not detectable.",
+  DNS: "Plant the host name where an intruder would use it: config files, SSH configs, backup scripts, internal docs. Any lookup is recorded with the resolver that asked, so it works from networks that block everything but DNS. Nothing in front of the name is needed, but anything there (a machine name, a username) is recorded too.",
+  DOCUMENT: "Download the Word file and leave it where an intruder would open it: file shares, home folders, backup archives, mailboxes. Opening it in Word loads a 1-pixel picture from HoneyShield and is recorded as HIGH. Word's Protected View (files marked as downloaded from the internet) holds the picture back until editing is enabled, so plant the file, don't email it.",
+  AWS_KEY: "A real AWS key with a deny-all policy: plant it in ~/.aws/credentials, CI variables, .env files or repositories. Any use of it, from any tool, is read from CloudTrail and alerted as CRITICAL, usually within 20 minutes. It can do nothing in your AWS account.",
 };
 
 // Copy text to the clipboard. Browsers that refuse the async Clipboard API (permissions policy,
@@ -1095,6 +1113,15 @@ function showArtifact(t) {
     if (m[key]) items.push(copyBlock(key, m[key]));
   }
   if (t.token_type === "API_KEY") items.push(copyBlock("decoy key", t.token_value));
+  if (t.token_type === "DNS" && m.hostname) {
+    items.push(copyBlock("host name", m.hostname));
+    if (m.examples && m.examples.config) items.push(copyBlock("in a config file", m.examples.config));
+    if (m.tagged_example) items.push(copyBlock("with a tag in front (recorded too)", m.tagged_example));
+  }
+  if (t.token_type === "AWS_KEY") items.push(...awsKeyArtifact(t));
+  if ((t.files || []).length) items.push(el("div", { class: "bait-files" }, el("strong", {}, "Download as:"),
+    ...t.files.map((kind) => el("button", { class: "secondary", type: "button",
+      onclick: () => downloadBaitFile(t, kind) }, BAIT_FILES[kind] || kind))));
   if (m.detection) items.push(el("p", {}, badge(m.detection.status, "info"), " ", m.detection.rule || ""));
   if (m.placement_warning) items.push(el("p", { class: "bad" }, m.placement_warning));
   items.push(el("p", { class: "muted" }, GUIDANCE[t.token_type] || ""));
@@ -1102,10 +1129,63 @@ function showArtifact(t) {
   box.hidden = false;
 }
 
+// Ready-to-plant files carrying the decoy (GET /api/v1/honey-tokens/{decoy_id}/files/{kind}).
+const BAIT_FILES = { "aws-credentials": "~/.aws/credentials", env: ".env file", kubeconfig: "kubeconfig",
+                     "ssh-config": "SSH config", docx: "Word document" };
+
+async function downloadBaitFile(t, kind) {
+  busy(1);
+  try {
+    const resp = await fetch(`/api/v1/honey-tokens/${encodeURIComponent(t.decoy_id)}/files/${encodeURIComponent(kind)}`, {
+      headers: { Authorization: `Bearer ${state.token}` }, credentials: "omit", cache: "no-store" });
+    if (!resp.ok) { status(`Download failed (HTTP ${resp.status}).`, true); return; }
+    const cd = resp.headers.get("Content-Disposition") || "";
+    const utf8 = cd.match(/filename\*=UTF-8''([^;]+)/);
+    const plain = cd.match(/filename="([^"]+)"/);
+    let name = plain ? plain[1] : kind;
+    try { if (utf8) name = decodeURIComponent(utf8[1]); } catch {}
+    const a = el("a", { href: URL.createObjectURL(await resp.blob()), download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    status(`Downloaded ${name}. Plant it where only an intruder would open it.`);
+  } catch { status("Download failed: the API is unreachable.", true); }
+  finally { busy(-1); }
+}
+
+// An AWS key decoy is created by the cloud-canary worker a few seconds after generation.
+function awsKeyArtifact(t) {
+  const m = t.metadata || {};
+  if (m.status === "active" && m.access_key_id && m.secret_access_key) {
+    const profile = m.profile_name || "default";
+    return [
+      copyBlock("~/.aws/credentials", `[${profile}]\naws_access_key_id = ${m.access_key_id}\naws_secret_access_key = ${m.secret_access_key}\n`),
+      copyBlock("environment variables", `AWS_ACCESS_KEY_ID=${m.access_key_id}\nAWS_SECRET_ACCESS_KEY=${m.secret_access_key}`),
+      el("p", { class: "muted" }, `IAM user ${m.iam_arn || m.iam_user}. Deny-all policy; nothing in the account is reachable with it.`),
+    ];
+  }
+  if (m.status === "failed") return [el("p", { class: "bad" }, `AWS refused to create the key: ${m.last_error || "unknown error"}. Revoke this decoy and check the worker's IAM policy (docs/cloud-canaries.md).`)];
+  if (m.status === "deleted") return [el("p", { class: "muted" }, "The key was deleted from AWS when this decoy was revoked.")];
+  if (t.is_active) setTimeout(() => refreshArtifact(t, (t._tries || 0) + 1), 5000);
+  return [el("p", { class: "muted" }, "Creating the key in AWS. This takes a few seconds; the credentials appear here.")];
+}
+
+async function refreshArtifact(t, tries) {
+  if (tries > 24 || $("#artifact").hidden || !state.project) return;
+  try {
+    const tokens = await api("GET", `/api/v1/honey-tokens?project_domain=${encodeURIComponent(state.project.domain)}&active_only=false&limit=100`);
+    const now = tokens.find((x) => x.id === t.id);
+    if (!now) return;
+    now._tries = tries;
+    showArtifact(now);
+    if ((now.metadata || {}).status !== "provisioning") await loadTokens();
+  } catch {}
+}
+
 $("#generate-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const params = f.get("token_type") === "API_KEY" && f.get("provider_style") ? { provider_style: f.get("provider_style") } : undefined;
+  const params = f.get("token_type") === "API_KEY" && f.get("provider_style") ? { provider_style: f.get("provider_style") }
+    : f.get("token_type") === "DOCUMENT" && f.get("template") ? { template: f.get("template") } : undefined;
   try {
     const t = await api("POST", `/api/v1/projects/${encodeURIComponent(state.project.domain)}/honey-tokens/generate`,
                         { token_type: f.get("token_type"), generator_params: params });
@@ -1190,7 +1270,11 @@ async function loadEvents(reset) {
     ? `${fmtNum(state.events.length)} ${filtered ? "matching " : ""}event${state.events.length === 1 ? "" : "s"} shown, newest first` : "";
 }
 $("#events-filter").addEventListener("submit", (e) => { e.preventDefault(); loadEvents(true).catch(() => {}); });
-$("#events-filter").addEventListener("reset", () => setTimeout(() => { setDecoyFilter(null); loadEvents(true).catch(() => {}); }, 0));
+// (signing out resets every form; with nobody signed in there is nothing to reload)
+$("#events-filter").addEventListener("reset", () => setTimeout(() => {
+  setDecoyFilter(null);
+  if (state.token) loadEvents(true).catch(() => {});
+}, 0));
 $("#events-filter [name=severity]").addEventListener("change", () => loadEvents(true).catch(() => {}));
 $("#events-filter [name=range]").addEventListener("change", () => loadEvents(true).catch(() => {}));
 
@@ -1237,6 +1321,9 @@ function openEvent(e, fromRow) {
       el("dl", { class: "facts" }, [
         detailRow("Label", e.decoy_label),
         detailRow("Type", e.decoy_type),
+        detailRow("ATT&CK", (e.attack || []).length ? el("span", { class: "attack" }, ...e.attack.map((t) =>
+          el("a", { href: t.url, target: "_blank", rel: "noopener noreferrer", title: t.tactics.join(", ") },
+             `${t.id} ${t.name}`))) : null),
         detailRow("Decoy id", e.decoy_id, true),
         detailRow("Project", e.project_domain, true),
       ].flat().filter(Boolean))),
@@ -1322,6 +1409,8 @@ const ALERT_FORMATS = {
            hint: "mailto: with one or more addresses, sent through your mail relay." },
   SYSLOG_CEF: { name: "SIEM (syslog + CEF)", placeholder: "syslog+tls://siem.example.com:6514",
                 hint: "Syslog over TLS (RFC 5425) carrying an ArcSight CEF message." },
+  PAGERDUTY: { name: "PagerDuty", placeholder: "pagerduty://<integration key>",
+               hint: "The Integration Key of an Events API v2 integration. Use pagerduty+eu:// for an EU account." },
 };
 const SEND_FROM = { LOW: "Every event", MEDIUM: "Medium and above", HIGH: "High and above", CRITICAL: "Critical only" };
 
@@ -1431,9 +1520,11 @@ const AUDIT_TYPES = [
     SYSTEM_ADMIN_BOOTSTRAPPED: "First system admin created" }],
   ["Decoys and events", { PROJECT_CREATED: "Project created", PROJECT_DELETED: "Project deleted",
     HONEY_TOKEN_CREATED: "Decoy created", HONEY_TOKEN_GENERATED: "Decoy generated", HONEY_TOKEN_ROTATED: "Decoy rotated",
+    HONEY_TOKEN_FILE_DOWNLOADED: "Decoy downloaded as a file",
     HONEY_TOKEN_REVOKED: "Decoy revoked", DETECTION_EVENT_MANUALLY_RECORDED: "Event entered by hand",
     DETECTION_HITS_SUPPRESSED: "Repeated hits suppressed", DETECTION_EVENTS_RECOVERED: "Hits recovered after an outage",
-    EVENTS_EXPORTED: "Events exported" }],
+    EVENTS_EXPORTED: "Events exported", CLOUD_CANARY_PROVISIONED: "AWS key decoy created in AWS",
+    CLOUD_CANARY_FAILED: "AWS refused an AWS key decoy", CLOUD_CANARY_DELETED: "AWS key decoy deleted from AWS" }],
   ["Integrations and alerts", { INTEGRATION_CREDENTIAL_CREATED: "Integration credential created",
     INTEGRATION_CREDENTIAL_REVOKED: "Integration credential revoked",
     INTEGRATION_REPORT_REJECTED_SECRET: "Hook report refused (bad signature)",

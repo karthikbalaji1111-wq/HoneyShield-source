@@ -118,12 +118,11 @@ class TestUserManagement:
         assert resp.status_code == 404
         
     def test_deactivated_user_cannot_authenticate(self, client, admin_a, user_a):
-        # 1. Deactivate
+        # Deactivate
         resp = client.post(f"/api/v1/users/{user_a.id}/deactivate", headers=auth_headers(admin_a))
         assert resp.status_code == 200
         assert resp.json()["is_active"] is False
         
-        # 2. Authenticate
         resp2 = client.get("/api/v1/users", headers=auth_headers(user_a))
         assert resp2.status_code == 401
 

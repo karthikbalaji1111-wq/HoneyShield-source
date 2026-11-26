@@ -1,4 +1,4 @@
-"""Runtime database privilege policy (HONEY-002).
+"""Runtime database privilege policy.
 
 HoneyShield uses three PostgreSQL identities:
 

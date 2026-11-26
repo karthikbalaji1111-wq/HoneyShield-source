@@ -1,4 +1,4 @@
-"""Case-insensitive identities and normalised project domains (HONEY-022/024).
+"""Case-insensitive identities and normalised project domains.
 
 Revision ID: 20261113_05
 Revises: 20261113_04

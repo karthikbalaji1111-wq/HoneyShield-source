@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# HoneyShield backup + restore DRILL (HONEY-028). Proves a backup is restorable; a backup
+# HoneyShield backup + restore DRILL. Proves a backup is restorable; a backup
 # command exiting 0 proves nothing.
 #
 #   1. pg_dump (custom format) of the live database, with SHA-256 checksum
@@ -19,7 +18,6 @@
 #                  -v "$PWD:/out" backup python -m app.workers.backup fetch latest \
 #                  --identity /out/backup-key.txt --out /out/restore.dump
 #                (docs/backup-and-restore.md)
-# ==============================================================================
 set -euo pipefail
 
 COMPOSE="${COMPOSE:-docker compose}"

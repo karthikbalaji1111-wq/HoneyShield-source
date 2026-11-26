@@ -1,4 +1,4 @@
-"""Honeypot form-field generator (HONEY-004).
+"""Honeypot form-field generator.
 
 The field is rendered EMPTY and kept off-screen. People never see or fill it; form-filling
 bots usually do. The customer's form handler checks it server-side and, when it is
@@ -38,6 +38,7 @@ class FormFieldGenerator(BaseGenerator):
         params: dict[str, Any],
         ingest_base_url: str | None = None,
         paths: Mapping[str, str] | None = None,
+        dns_zone: str | None = None,
     ) -> GeneratedTokenData:
         field_name = params.get("field_name") or secrets.choice(HONEYPOT_FIELD_NAMES)
         if not isinstance(field_name, str) or not _FIELD_NAME_RE.match(field_name):

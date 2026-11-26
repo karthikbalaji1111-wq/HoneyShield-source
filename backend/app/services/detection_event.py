@@ -27,7 +27,8 @@ def _is_duplicate_public_hit(exc: Exception) -> bool:
     if not isinstance(exc, IntegrityError):
         return False
     message = str(getattr(exc, "orig", exc))
-    return "uq_detection_events_public_request" in message or "detection_events.idempotency_key" in message
+    return any(name in message for name in (
+        "uq_detection_events_public_request", "uq_detection_events_cloud_event", "detection_events.idempotency_key"))
 
 
 #: Default severity of a public trigger, by what an interaction with that type implies.
@@ -36,12 +37,18 @@ def _is_duplicate_public_hit(exc: Exception) -> bool:
 #: PIXEL: a decoy document or email was opened somewhere.
 #: FORM_FIELD: an automated form submitter, usually a bot.
 #: API_KEY: a planted credential was presented.
+#: DNS: a decoy host name was looked up; someone read it somewhere and used it.
+#: AWS_KEY: a planted cloud credential was used against AWS.
+#: DOCUMENT: a decoy Word document was opened.
 DEFAULT_SEVERITY_BY_TOKEN_TYPE: dict[HoneyTokenType, EventSeverity] = {
     HoneyTokenType.URL: EventSeverity.HIGH,
     HoneyTokenType.LINK: EventSeverity.MEDIUM,
     HoneyTokenType.PIXEL: EventSeverity.HIGH,
     HoneyTokenType.FORM_FIELD: EventSeverity.MEDIUM,
     HoneyTokenType.API_KEY: EventSeverity.CRITICAL,
+    HoneyTokenType.DNS: EventSeverity.HIGH,
+    HoneyTokenType.AWS_KEY: EventSeverity.CRITICAL,
+    HoneyTokenType.DOCUMENT: EventSeverity.HIGH,
 }
 
 #: Longest token value ever stored (honey_tokens.token_value is VARCHAR(512)).
@@ -157,7 +164,6 @@ class DetectionEventService(BaseService):
             max_total_bytes=settings.header_max_total_bytes,
         )
 
-        # Truncate user-agent if excessively large
         clean_user_agent = user_agent[:1024] if user_agent and len(user_agent) > 1024 else user_agent
 
         try:
@@ -165,9 +171,7 @@ class DetectionEventService(BaseService):
             if not token:
                 raise HoneyTokenNotFoundError(f"Token '{token_value}' not found")
 
-            # Administrative cross-tenant guard:
-            # If current_user is authenticated and tenant-scoped, verify token ownership.
-            # Mask cross-tenant unauthorized access as 404 (HoneyTokenNotFoundError).
+            # A tenant-scoped caller may only touch its own tenant's tokens; others look like a 404.
             if self._scoped_tenant_id is not None:
                 from app.core.auth_exceptions import ForbiddenError
                 try:
@@ -176,7 +180,7 @@ class DetectionEventService(BaseService):
                     raise HoneyTokenNotFoundError(f"Token '{token_value}' not found")
 
             if self.current_user is None:
-                # Manual evidence must always be attributable to a person (HONEY-006).
+                # Manual evidence must always be attributable to a person.
                 from app.core.auth_exceptions import UnauthorizedError
                 raise UnauthorizedError("Manually recorded events require an authenticated user")
 
@@ -218,9 +222,7 @@ class DetectionEventService(BaseService):
                 pass
             raise
 
-    # ------------------------------------------------------------------
     # Public (unauthenticated) ingestion
-    # ------------------------------------------------------------------
 
     def find_token_for_ingest(self, token_value: str) -> HoneyToken | None:
         """Resolve a public trigger value to its token, or None if it is not a token.
@@ -241,6 +243,8 @@ class DetectionEventService(BaseService):
         headers: dict[str, Any] | None = None,
         request_id: str | None = None,
         triggered_at: "datetime | None" = None,
+        allowed_headers: frozenset[str] | None = None,
+        source: EventSource = EventSource.PUBLIC_INGEST,
     ) -> DetectionEvent:
         """Persist a public trigger of an already-resolved token.
 
@@ -248,6 +252,10 @@ class DetectionEventService(BaseService):
         id for the request (stored as ``idempotency_key``; at most one public event per id), and
         ``triggered_at`` is the time the edge saw a hit that is recorded later (replay after an
         outage). A duplicate request id raises ``DuplicatePublicHitError``.
+
+        DNS hits (``allowed_headers``: their own context keys) are PUBLIC_INGEST: HoneyShield's name
+        server saw the query. Cloud canary uses are CLOUD_AUDIT: AWS CloudTrail recorded them and
+        ``request_id`` is the CloudTrail event id, so polling the same window twice stores nothing new.
         """
         from app.core.config import get_settings
         from app.core.header_security import sanitize_forensic_headers
@@ -265,6 +273,7 @@ class DetectionEventService(BaseService):
             max_value_length=settings.header_max_value_length,
             max_count=settings.header_max_count,
             max_total_bytes=settings.header_max_total_bytes,
+            allowed=allowed_headers,
         )
         clean_user_agent = user_agent[:1024] if user_agent and len(user_agent) > 1024 else user_agent
         severity = DEFAULT_SEVERITY_BY_TOKEN_TYPE.get(token.token_type, EventSeverity.MEDIUM)
@@ -278,7 +287,7 @@ class DetectionEventService(BaseService):
                 severity=severity,
                 user_agent=clean_user_agent,
                 headers=clean_headers,
-                source=EventSource.PUBLIC_INGEST,
+                source=source,
                 idempotency_key=request_id,
                 triggered_at=triggered_at,
             )
@@ -422,10 +431,10 @@ class DetectionEventService(BaseService):
             **({"triggered_at": triggered_at} if triggered_at is not None else {}),
         )
         self.session.flush()
-        # Tamper-evident chain (Phase 9): one append-only link per event, same transaction.
+        # Tamper-evident chain: one append-only link per event, same transaction.
         from app.services import evidence
         evidence.append(self.session, event, token.project.tenant_id)
-        # Durable alerting (HONEY-007): deliveries are queued in the SAME transaction, so a
+        # Durable alerting: deliveries are queued in the SAME transaction, so a
         # committed event always has its alerts queued and a rolled-back one never alerts.
         from app.services.alerting import enqueue_for_event
         enqueue_for_event(self.session, event, token)
@@ -478,7 +487,6 @@ class DetectionEventService(BaseService):
             prepared = self._realtime_payload(event, event.honey_token)
         event_data, tenant_id = prepared
         get_broadcaster().publish(event_data, tenant_id)
-
 
     def list_recent_events(
         self,
@@ -626,7 +634,7 @@ class DetectionEventService(BaseService):
         return [{"date": d, "total": sum(c.values()), "by_severity": c} for d, c in series.items()]
 
     def get_statistics(self) -> dict[str, int]:
-        """Return global or tenant-scoped detection-event totals in a single SQL pass (F-002).
+        """Return global or tenant-scoped detection-event totals in a single SQL pass.
 
         Args:
             None.

@@ -32,7 +32,7 @@ class ProjectCreate(SchemaBase):
     @field_validator("domain")
     @classmethod
     def validate_domain(cls, value: str) -> str:
-        """HONEY-024: a hostname, not a URL, path or free text."""
+        """A hostname, not a URL, path or free text."""
         host = value.strip().lower().rstrip(".")
         labels = host.split(".")
         if (len(host) > 253 or len(labels) < 2 or not all(

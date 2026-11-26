@@ -1,4 +1,4 @@
-"""Focused security tests for Security Headers Hardening (Finding F-015 / Phase 10).
+"""Security headers.
 
 Covers:
 - Configuration validation (X-Frame-Options, Referrer-Policy, CSP unsafe directives, HSTS limits)
@@ -13,7 +13,7 @@ Covers:
   - Spoofed X-Forwarded-Proto from untrusted peer rejected
   - Preload directive support
 - Global disable switch (security_headers_enabled=False)
-- Coexistence with Phase 11 CORS headers (preflight OPTIONS, simple requests, error responses)
+- Coexistence with CORS headers (preflight OPTIONS, simple requests, error responses)
 - Public HoneyToken ingestion endpoints under security headers
 - WebSocket non-HTTP scope pass-through
 """
@@ -43,11 +43,6 @@ def _reset_limiters():
     reset_all_limiters()
     yield
     reset_all_limiters()
-
-
-# ===========================================================================
-# 1. Configuration Validation Tests
-# ===========================================================================
 
 
 class TestSecurityHeadersConfigurationValidation:
@@ -128,11 +123,6 @@ class TestSecurityHeadersConfigurationValidation:
             Settings(jwt_secret_key="a" * 32, security_headers_hsts_max_age=100000000)
 
 
-# ===========================================================================
-# 2. Security Headers on Successful Responses
-# ===========================================================================
-
-
 class TestSecurityHeadersOnSuccess:
     """Validate emission of all standard security headers on successful endpoints."""
 
@@ -184,11 +174,6 @@ class TestSecurityHeadersOnSuccess:
         assert resp.headers.get("referrer-policy") == "no-referrer"
         assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         assert resp.headers.get("cache-control") == "no-store"
-
-
-# ===========================================================================
-# 3. Security Headers on Error Responses
-# ===========================================================================
 
 
 class TestSecurityHeadersOnErrorResponses:
@@ -277,11 +262,6 @@ class TestSecurityHeadersOnErrorResponses:
             assert resp.headers.get("cache-control") == "no-store"
 
 
-# ===========================================================================
-# 4. Zero Duplicate Headers & Case-Insensitive Deduplication
-# ===========================================================================
-
-
 class TestDeduplicationAndHeaderIntegrity:
     """Verify headers are not duplicated and exist exactly once."""
 
@@ -302,11 +282,6 @@ class TestDeduplicationAndHeaderIntegrity:
         ]:
             count = raw_header_names.count(header_name)
             assert count == 1, f"Header '{header_name}' appeared {count} times (expected exactly 1)"
-
-
-# ===========================================================================
-# 5. Endpoint-Specific Header Preservation (SSE, Streaming)
-# ===========================================================================
 
 
 class TestEndpointSpecificHeaderPreservation:
@@ -337,11 +312,6 @@ class TestEndpointSpecificHeaderPreservation:
             assert headers.get("x-frame-options") == "DENY"
             assert headers.get("referrer-policy") == "no-referrer"
             assert headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-
-
-# ===========================================================================
-# 6. Strict HSTS Invariants
-# ===========================================================================
 
 
 class TestHSTSInvariants:
@@ -459,11 +429,6 @@ class TestHSTSInvariants:
             sec_mw.settings.security_headers_hsts_preload = orig_preload
 
 
-# ===========================================================================
-# 7. Security Headers Global Disable Switch
-# ===========================================================================
-
-
 class TestSecurityHeadersDisableSwitch:
     """Verify security_headers_enabled=False bypasses middleware injection."""
 
@@ -489,11 +454,6 @@ class TestSecurityHeadersDisableSwitch:
             assert "permissions-policy" not in resp.headers
         finally:
             sec_mw.settings.security_headers_enabled = orig_enabled
-
-
-# ===========================================================================
-# 8. Coexistence with Phase 11 CORS Headers
-# ===========================================================================
 
 
 class TestCoexistenceWithCORS:
@@ -571,11 +531,6 @@ class TestCoexistenceWithCORS:
         assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
-# ===========================================================================
-# 9. Public HoneyToken Ingestion Endpoints
-# ===========================================================================
-
-
 class TestPublicIngestionSecurityHeaders:
     """Verify public deception ingestion endpoints return security headers."""
 
@@ -602,11 +557,6 @@ class TestPublicIngestionSecurityHeaders:
         assert resp.headers.get("x-frame-options") == "DENY"
         assert resp.headers.get("referrer-policy") == "no-referrer"
         assert resp.headers.get("content-security-policy") == "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
-
-
-# ===========================================================================
-# 10. WebSocket Non-HTTP Scope Pass-Through
-# ===========================================================================
 
 
 class TestWebSocketNonHttpScopePassThrough:

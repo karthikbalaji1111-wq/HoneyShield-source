@@ -68,6 +68,8 @@ LABELS = {
     "backups": "Backups",
     "certificates": "TLS certificates",
     "disk": "Disk space",
+    "dns_listener": "DNS decoys",
+    "cloud_canary": "Cloud canaries",
 }
 
 
@@ -228,6 +230,40 @@ def check_alert_worker(session: Session) -> CheckResult:
         return CheckResult("alert_worker", False, detail=f"The alert worker has not reported in for {_minutes(age)}. "
                                                          "Alerts are not being sent.")
     return CheckResult("alert_worker", True, data={"age_seconds": int(age)})
+
+
+def check_dns_listener(session: Session, settings: Settings) -> CheckResult | None:
+    """DNS decoys are only watched while the listener delivers; it sends a heartbeat every minute."""
+    if not settings.dns_token_zone:
+        return None
+    age = age_seconds(get_status(session, "dns_listener"))
+    if age is None or age > 300:
+        since = "has never reported in" if age is None else f"has not reported in for {_minutes(age)}"
+        return CheckResult("dns_listener", False, detail=f"The DNS listener {since}. Lookups of DNS decoys "
+                                                         "are not reaching HoneyShield.")
+    return CheckResult("dns_listener", True, data={"age_seconds": int(age)})
+
+
+def check_cloud_canary(session: Session, settings: Settings) -> CheckResult | None:
+    """Cloud canary keys are only watched while the worker can read CloudTrail."""
+    if not settings.aws_canary_enabled:
+        return None
+    row = get_status(session, "cloud_canary_worker")
+    age = age_seconds(row)
+    if age is None or age > 300:
+        since = "has never reported in" if age is None else f"has not reported in for {_minutes(age)}"
+        return CheckResult("cloud_canary", False, detail=f"The cloud canary worker {since}. Uses of AWS key "
+                                                         "decoys are not being detected.")
+    value = row.value or {}
+    if not value.get("ok", False):
+        return CheckResult("cloud_canary", False, detail="AWS refuses the cloud canary worker's requests: "
+                                                         f"{value.get('error') or 'unknown error'}.")
+    errors = (value.get("last_poll") or {}).get("region_errors") or {}
+    if errors:
+        listed = ", ".join(f"{r} ({c})" for r, c in sorted(errors.items()))
+        return CheckResult("cloud_canary", False, WARNING, f"CloudTrail could not be read in: {listed}. Uses of the "
+                                                           "keys in these regions are not being detected.")
+    return CheckResult("cloud_canary", True, data={"age_seconds": int(age)})
 
 
 def check_alerts(session: Session, settings: Settings, since: datetime) -> CheckResult:
@@ -426,9 +462,13 @@ def run_checks(session: Session, settings: Settings, since: datetime, *,
     for name, fn in (("alert_worker", lambda: check_alert_worker(session)),
                      ("alerts", lambda: check_alerts(session, settings, since)),
                      ("checkpoints", lambda: check_checkpoints(session, settings)),
-                     ("backups", lambda: check_backups(session, settings))):
+                     ("backups", lambda: check_backups(session, settings)),
+                     ("dns_listener", lambda: check_dns_listener(session, settings)),
+                     ("cloud_canary", lambda: check_cloud_canary(session, settings))):
         try:
-            results.append(fn())
+            result = fn()
+            if result is not None:
+                results.append(result)
         except Exception as exc:
             session.rollback()
             logger.exception("Watchdog check %s failed to run", name)

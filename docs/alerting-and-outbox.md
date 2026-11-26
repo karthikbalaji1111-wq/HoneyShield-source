@@ -37,16 +37,18 @@ are exported on `/metrics`.
 | `SLACK` | `https://…` | `{"text": …}`, accepted by Slack, Teams and Mattermost incoming webhooks |
 | `EMAIL` | `mailto:a@x.com[,b@y.com]` (≤10) | plain-text mail through the operator's SMTP relay (`SMTP_*`), with the `X-HS-*` signature headers over the body |
 | `SYSLOG_CEF` | `syslog+tls://siem.example.com:6514` | RFC 5424 over TLS (RFC 5425 octet counting), body in ArcSight CEF; parsed natively by Splunk, QRadar, Sentinel, Elastic and ArcSight |
+| `PAGERDUTY` | `pagerduty://<integration key>` (`pagerduty+eu://` for an EU account) | PagerDuty Events API v2 `trigger` (below) |
 
 The response returns the signing secret once (not for `SYSLOG_CEF`, which relies on TLS server
-authentication). `EMAIL` destinations can only be created when `SMTP_HOST` is configured.
+authentication, nor for `PAGERDUTY`, where the integration key identifies the sender). `EMAIL` destinations can only be created when `SMTP_HOST` is configured.
 
 **CEF mapping:** signature `honeytoken.<TYPE>`; severity LOW=3, MEDIUM=5, HIGH=8, CRITICAL=10.
 Extensions:
 * `rt` (epoch ms), `src`, `requestMethod`, `request` (token replaced by `{token}`) and
   `externalId` (delivery id);
 * `cn1` event id;
-* `cs1` decoy id, `cs2` project, `cs3` decoy label, `cs4` detection source, `cs5` token type.
+* `cs1` decoy id, `cs2` project, `cs3` decoy label, `cs4` detection source, `cs5` token type;
+* `cs6` MITRE ATT&CK technique ids, comma-separated (left out when the decoy type has none).
 
 Syslog uses facility authpriv; the severity is notice/warning/err/crit by alert severity.
 
@@ -55,6 +57,23 @@ Syslog uses facility authpriv; the severity is notice/warning/err/crit by alert 
   and 4xx replies retry with backoff. If SMTP is removed, deliveries wait instead of failing.
 * *Syslog:* no acknowledgement exists in the protocol. A completed TLS handshake and write
   counts as delivered; connection or TLS failures retry.
+* *PagerDuty:* 2xx (PagerDuty answers 202) is delivered; 400 (bad integration key or payload) is
+  permanent; 429 and 5xx retry with backoff.
+
+**PagerDuty:** create an *Events API v2* integration on the service that should be paged and use
+its Integration Key. Each detection is a `trigger` with `dedup_key` `honeyshield-<event id>`, so a
+retried delivery never pages twice. `payload.severity` is critical (CRITICAL), error (HIGH),
+warning (MEDIUM) or info (LOW); `source` and `group` are the project, `component` the decoy type,
+`class` is `honeytoken`, and `custom_details` carries the same fields as the JSON webhook plus the
+ATT&CK techniques. The request goes to `events.pagerduty.com` (or `events.eu.pagerduty.com`)
+through the webhook transport, with the same SSRF checks and address pinning; the integration key
+is never looked up in DNS or written to the audit log.
+
+**MITRE ATT&CK:** every alert names the techniques its decoy type points to
+(`backend/app/core/attack.py`): for example an AWS key decoy is T1552.001 *Credentials In Files*
+and T1078.004 *Cloud Accounts*. Webhook and PagerDuty payloads carry them in `attack`, Slack ends
+with `ATT&CK: …`, email has an `ATT&CK:` line and CEF uses `cs6`. They are the likely technique,
+not a verdict; form honeypots map to none.
 
 ## Payload (HONEYSHIELD format)
 
@@ -62,7 +81,9 @@ Syslog uses facility authpriv; the severity is notice/warning/err/crit by alert 
 {"type":"honeyshield.detection","version":1,"data":{"delivery_id":12,"event_id":345,
  "severity":"HIGH","source":"PUBLIC_INGEST","token_type":"URL","decoy_id":"dcy_…","token_label":"…",
  "project":"app.example.com","ip_address":"203.0.113.9","http_method":"GET",
- "request_path":"/t/{token}","triggered_at":"…"}}
+ "request_path":"/t/{token}","triggered_at":"…",
+ "attack":[{"id":"T1595.003","name":"Active Scanning: Wordlist Scanning"},
+           {"id":"T1213","name":"Data from Information Repositories"}]}}
 ```
 The token value is replaced by `{token}`; headers and user agents are not sent.
 Headers: `X-HS-Delivery` (de-duplicate on this), `X-HS-Event`, `X-HS-Timestamp`,
@@ -77,7 +98,8 @@ retries and dead-lettering. No evidence is created, and a CHECK constraint keeps
 delivery tied to an event.
 * Webhooks receive `{"type": "honeyshield.test", ...}` with `source: "TEST"`.
 * Slack gets a plain sentence; email uses the subject "[HoneyShield] Test alert: this
-  destination works"; syslog sends CEF signature `honeytoken.TEST`.
+  destination works"; syslog sends CEF signature `honeytoken.TEST`; PagerDuty gets an `info`
+  event whose summary says it is a test (dedup key `honeyshield-test-<delivery id>`).
 * Limit: 5 per destination per minute.
 
 ## SSRF protection
@@ -101,7 +123,8 @@ multi-tenant SaaS deployment.
 
 ## Not included
 
-PagerDuty and vendor-specific APIs (Splunk HEC tokens, Sentinel DCR): use syslog/CEF or the signed
+Vendor-specific SIEM APIs (Splunk HEC tokens, Sentinel DCR): use syslog/CEF or the signed JSON
+webhook. Opsgenie and other paging services: their generic webhook integrations accept the signed
 JSON webhook.
 
 Verification:

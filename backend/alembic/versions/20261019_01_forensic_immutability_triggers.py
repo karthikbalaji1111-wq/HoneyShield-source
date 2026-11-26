@@ -4,7 +4,6 @@ Revision ID: 20261019_01
 Revises: 20261002_01
 Create Date: 2026-10-19 12:00:00.000000+00:00
 
-Phase 4 forensic integrity:
 - Enforces strict immutability on detection_events and audit_logs tables at the database level.
 - Adds BEFORE UPDATE OR DELETE triggers that raise exceptions upon any attempted DML modification or deletion.
 """

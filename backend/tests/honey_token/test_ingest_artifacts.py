@@ -1,4 +1,4 @@
-"""Delivered-artifact end-to-end tests (HONEY-003).
+"""Delivered-artifact end-to-end tests.
 
 Each test generates a token through the API, takes the artifact HoneyShield
 actually hands to the customer (URL, link href, pixel src, form collection URL),
@@ -72,7 +72,7 @@ def test_link_artifact_reaches_ingestion(client, db_session, admin_a, project_a)
 def test_pixel_artifact_reaches_ingestion(client, db_session, admin_a, project_a):
     data = _generate(client, admin_a, project_a, "PIXEL")
     meta = data["metadata"]
-    # HONEY-004: no web-page snippet; the embed is for decoy documents and emails only.
+    # No web-page snippet; the embed is for decoy documents and emails only.
     assert "html_tag" not in meta
     assert "display:none" not in meta["embed_html"]
     assert meta["intended_placement"] == ["decoy_document", "decoy_email"]
@@ -86,7 +86,7 @@ def test_pixel_artifact_reaches_ingestion(client, db_session, admin_a, project_a
 
 
 def test_form_field_is_an_empty_honeypot_without_embedded_secrets(client, admin_a, project_a):
-    """HONEY-004: no pre-filled fake CSRF value; detection is via CUSTOMER_HOOK.
+    """No pre-filled fake CSRF value; detection is via CUSTOMER_HOOK.
 
     The end-to-end FORM_FIELD flow (bot fills the field, customer hook reports it, event
     stored) is in tests/integrations/test_customer_hook.py.
