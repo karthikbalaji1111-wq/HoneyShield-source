@@ -27,7 +27,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.base import SchemaBase
 from app.services import alerting
-from app.services.alerting import webhook
+from app.services.alerting import siem, webhook
 
 router = APIRouter(prefix="/alert-destinations", tags=["alerting"])
 
@@ -36,7 +36,9 @@ class AlertDestinationCreate(SchemaBase):
     url: str = Field(max_length=2048, description=(
         "HONEYSHIELD/SLACK: https URL on a public host. EMAIL: mailto:a@example.com[,b@example.com]. "
         "SYSLOG_CEF: syslog+tls://siem.example.com:6514. PAGERDUTY: pagerduty://<integration key> "
-        "(pagerduty+eu:// for the EU region)."))
+        "(pagerduty+eu:// for the EU region). SPLUNK_HEC: splunk://<HEC token>@<host>[:8088][?index=<index>]. "
+        "SENTINEL: sentinel://<client id>:<client secret>@<DCR logs-ingestion host>/<DCR immutable id>/<stream>"
+        "?tenant=<tenant id>."))
     label: str | None = Field(default=None, max_length=255)
     format: AlertFormat = AlertFormat.HONEYSHIELD
     min_severity: EventSeverity = EventSeverity.MEDIUM
@@ -47,7 +49,7 @@ class AlertDestinationCreate(SchemaBase):
 class AlertDestinationResponse(SchemaBase):
     destination_id: str
     label: str | None
-    url: str
+    url: str = Field(description="The destination. Splunk HEC tokens and Sentinel client secrets are masked.")
     format: AlertFormat
     min_severity: EventSeverity
     project_id: int | None
@@ -58,8 +60,8 @@ class AlertDestinationResponse(SchemaBase):
 class AlertDestinationCreated(AlertDestinationResponse):
     signing_secret: str | None = Field(description=(
         "Verify X-HS-Signature (webhook and email headers) with this. Shown once. None for SYSLOG_CEF, "
-        "which relies on TLS server authentication instead, and for PAGERDUTY, which authenticates "
-        "HoneyShield by the integration key."))
+        "which relies on TLS server authentication instead, and for PAGERDUTY, SPLUNK_HEC and SENTINEL, "
+        "which authenticate HoneyShield by their own key, token or Entra application."))
 
 
 class DeliveryResponse(SchemaBase):
@@ -77,7 +79,8 @@ class DeliveryResponse(SchemaBase):
 
 
 def _out(dest: AlertDestination, model=AlertDestinationResponse, **extra):
-    return model(destination_id=dest.public_id, label=dest.label, url=dest.url, format=dest.format,
+    return model(destination_id=dest.public_id, label=dest.label, url=siem.masked_url(dest.url, dest.format.value),
+                 format=dest.format,
                  min_severity=dest.min_severity, project_id=dest.project_id, is_active=dest.is_active,
                  created_at=dest.created_at, **extra)
 
@@ -144,7 +147,8 @@ def create_destination(payload: AlertDestinationCreate, session: SessionDependen
     )
     session.commit()
     secret = None
-    if dest.format not in (AlertFormat.SYSLOG_CEF, AlertFormat.PAGERDUTY):
+    if dest.format not in (AlertFormat.SYSLOG_CEF, AlertFormat.PAGERDUTY, AlertFormat.SPLUNK_HEC,
+                           AlertFormat.SENTINEL):
         secret = webhook.signing_secret(settings.integration_signing_key, dest.public_id, dest.key_salt)
     return _out(dest, AlertDestinationCreated, signing_secret=secret)
 

@@ -106,7 +106,7 @@ class DetectionEventResponse(SchemaBase):
     triggered_at: datetime = Field(description="Time at which the event was triggered.")
     created_at: datetime = Field(description="Event persistence timestamp.")
     decoy_id: str | None = Field(default=None, description="Public identifier of the triggered decoy (never its secret value).")
-    decoy_type: str | None = Field(default=None, description="Decoy type: URL, LINK, PIXEL, DOCUMENT, FORM_FIELD, API_KEY, DNS or AWS_KEY.")
+    decoy_type: str | None = Field(default=None, description="Decoy type: URL, LINK, PIXEL, DOCUMENT, FORM_FIELD, API_KEY, DNS, AWS_KEY or AD_ACCOUNT.")
     decoy_label: str | None = Field(default=None, description="Operator-given label of the decoy.")
     project_domain: str | None = Field(default=None, description="Domain of the project the decoy belongs to.")
     attack: list[AttackTechnique] = Field(default_factory=list, description=(

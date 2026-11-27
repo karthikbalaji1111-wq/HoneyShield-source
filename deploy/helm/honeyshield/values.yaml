@@ -4,8 +4,8 @@
 # Published by .github/workflows/release.yml for each version tag (linux/amd64 and linux/arm64, with
 # SBOM and signed provenance). A private registry needs imagePullSecrets (docs/kubernetes.md).
 image:
-  backend: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-backend, tag: "1.4.0", pullPolicy: IfNotPresent }
-  edge: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-edge, tag: "1.4.0", pullPolicy: IfNotPresent }
+  backend: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-backend, tag: "1.5.0", pullPolicy: IfNotPresent }
+  edge: { repository: ghcr.io/karthikbalaji1111-wq/honeyshield-edge, tag: "1.5.0", pullPolicy: IfNotPresent }
   # Valkey: BSD-licensed, Redis-protocol compatible (Redis 7.4+ is RSALv2/SSPLv1). Any Redis-compatible
   # image works; the chart uses the redis-server / redis-cli names both ship.
   redis: { repository: valkey/valkey, tag: "9.0.7-alpine", pullPolicy: IfNotPresent }

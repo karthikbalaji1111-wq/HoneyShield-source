@@ -49,6 +49,7 @@ DEFAULT_SEVERITY_BY_TOKEN_TYPE: dict[HoneyTokenType, EventSeverity] = {
     HoneyTokenType.DNS: EventSeverity.HIGH,
     HoneyTokenType.AWS_KEY: EventSeverity.CRITICAL,
     HoneyTokenType.DOCUMENT: EventSeverity.HIGH,
+    HoneyTokenType.AD_ACCOUNT: EventSeverity.CRITICAL,
 }
 
 #: Longest token value ever stored (honey_tokens.token_value is VARCHAR(512)).
@@ -312,12 +313,16 @@ class DetectionEventService(BaseService):
         user_agent: str | None,
         headers: dict[str, Any] | None,
         extra_commit: "Callable[[], None] | None" = None,
+        allowed_headers: frozenset[str] | None = None,
+        severity: EventSeverity | None = None,
     ) -> DetectionEvent:
         """Persist a CUSTOMER_HOOK event reported by an authenticated integration.
 
         IP, path and time are asserted by the customer and stored as reported (after
         normalisation); the event is labelled CUSTOMER_HOOK so it is never mistaken for
-        something HoneyShield observed itself. Severity comes from the token type.
+        something HoneyShield observed itself. Severity comes from the token type unless the
+        server-side mapping of a directory event chose it (``severity``; never the reporter).
+        ``allowed_headers`` replaces the HTTP header allowlist for directory context keys.
         """
         from app.core.config import get_settings
         from app.core.header_security import sanitize_forensic_headers
@@ -334,6 +339,7 @@ class DetectionEventService(BaseService):
             max_value_length=settings.header_max_value_length,
             max_count=settings.header_max_count,
             max_total_bytes=settings.header_max_total_bytes,
+            allowed=allowed_headers,
         )
         try:
             event = self._persist_event(
@@ -341,7 +347,7 @@ class DetectionEventService(BaseService):
                 ip_address=norm_ip,
                 request_path=request_path[:2048],
                 http_method=http_method[:10],
-                severity=DEFAULT_SEVERITY_BY_TOKEN_TYPE.get(token.token_type, EventSeverity.MEDIUM),
+                severity=severity or DEFAULT_SEVERITY_BY_TOKEN_TYPE.get(token.token_type, EventSeverity.MEDIUM),
                 user_agent=(user_agent or None) and user_agent[:1024],
                 headers=clean_headers,
                 source=EventSource.CUSTOMER_HOOK,

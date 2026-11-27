@@ -38,9 +38,17 @@ are exported on `/metrics`.
 | `EMAIL` | `mailto:a@x.com[,b@y.com]` (≤10) | plain-text mail through the operator's SMTP relay (`SMTP_*`), with the `X-HS-*` signature headers over the body |
 | `SYSLOG_CEF` | `syslog+tls://siem.example.com:6514` | RFC 5424 over TLS (RFC 5425 octet counting), body in ArcSight CEF; parsed natively by Splunk, QRadar, Sentinel, Elastic and ArcSight |
 | `PAGERDUTY` | `pagerduty://<integration key>` (`pagerduty+eu://` for an EU account) | PagerDuty Events API v2 `trigger` (below) |
+| `SPLUNK_HEC` | `splunk://<HEC token>@<host>[:8088][?index=<index>]` | one JSON event to Splunk's HTTP Event Collector (below) |
+| `SENTINEL` | `sentinel://<client id>:<client secret>@<DCR ingestion host>/<DCR immutable id>/<stream>?tenant=<tenant id>` | one row in the `HoneyShield_CL` table through the Azure Monitor Logs Ingestion API (below) |
 
-The response returns the signing secret once (not for `SYSLOG_CEF`, which relies on TLS server
-authentication, nor for `PAGERDUTY`, where the integration key identifies the sender). `EMAIL` destinations can only be created when `SMTP_HOST` is configured.
+The response returns the signing secret once. It is not returned for these formats, which
+authenticate HoneyShield in other ways:
+* `SYSLOG_CEF` relies on TLS server authentication.
+* `PAGERDUTY` uses the integration key to identify the sender.
+* `SPLUNK_HEC` uses the HEC token.
+* `SENTINEL` uses the Entra application.
+
+API responses and the console show Splunk tokens and Sentinel client secrets masked. `EMAIL` destinations can only be created when `SMTP_HOST` is configured.
 
 **CEF mapping:** signature `honeytoken.<TYPE>`; severity LOW=3, MEDIUM=5, HIGH=8, CRITICAL=10.
 Extensions:
@@ -59,6 +67,65 @@ Syslog uses facility authpriv; the severity is notice/warning/err/crit by alert 
   counts as delivered; connection or TLS failures retry.
 * *PagerDuty:* 2xx (PagerDuty answers 202) is delivered; 400 (bad integration key or payload) is
   permanent; 429 and 5xx retry with backoff.
+* *Splunk:* a 2xx answer is delivered. 400 (for example, a wrong index) and 401/403 (a bad or
+  disabled token) are permanent. 429, 503 and network errors retry.
+* *Sentinel:* a 2xx answer is delivered. Each case is handled as follows:
+  * *Entra refuses the credentials* (`invalid_client` and the like): permanent. The outbox records
+    only the error code, never the secret.
+  * *Entra is unreachable or answers 5xx:* retried.
+  * *403:* retried. A new Monitoring Metrics Publisher role assignment can take up to 30 minutes
+    to apply.
+  * *401:* the cached token is dropped and the delivery retried.
+  * *400 and 413:* permanent.
+
+**Splunk HTTP Event Collector:** create an HEC token in Splunk (*Settings › Data inputs › HTTP
+Event Collector*). Then use `splunk://<token>@<host>`:
+* Port 8088 is Splunk Enterprise's default.
+* Splunk Cloud uses `http-inputs-<stack>.splunkcloud.com:443`.
+* Ports 443, 8088 and 8443 are allowed.
+
+The request is `POST /services/collector/event` with `Authorization: Splunk <token>` and this event:
+* `sourcetype` `honeyshield:detection`, `source` `honeyshield`;
+* `time` is when the decoy fired;
+* `index` is the token's default unless the URL has `?index=`;
+* `event` carries the same fields as the JSON webhook, including `attack`.
+
+HoneyShield always sends an `X-Splunk-Request-Channel` id, so tokens with indexer acknowledgement
+accept it too. HoneyShield counts the HEC's 200 as delivered and does not poll for the
+acknowledgement. Search with
+`sourcetype="honeyshield:detection" | stats count by event.severity, event.token_type`.
+
+**Microsoft Sentinel:** Sentinel reads custom data from its Log Analytics workspace, which
+HoneyShield writes through the Logs Ingestion API. Setup takes three steps:
+1. **Deploy the template.** Deploy `deploy/sentinel/honeyshield-sentinel.json` into the workspace's
+   resource group, for example
+   `az deployment group create -g <rg> --template-file deploy/sentinel/honeyshield-sentinel.json
+   --parameters workspaceName=<workspace>`. It creates:
+   * the `HoneyShield_CL` table;
+   * a data collection rule of kind `Direct`, which has its own ingestion endpoint;
+
+   Its outputs are the rule's immutable id, its logs-ingestion endpoint and the stream
+   (`Custom-HoneyShield`).
+2. **Create the Entra application.** Register an application in Entra ID and create a client
+   secret for it. On the data collection rule, give the application the **Monitoring Metrics
+   Publisher** role.
+3. **Add the destination.** Use
+   `sentinel://<application id>:<secret>@<endpoint host>/<immutable id>/Custom-HoneyShield?tenant=<directory id>`,
+   percent-encoding the secret.
+
+Delivery works as follows:
+* HoneyShield gets a token from `login.microsoftonline.com` (client credentials, scope
+  `https://monitor.azure.com//.default`) and reuses it until shortly before it expires.
+* It sends each alert as a one-row JSON array to
+  `/dataCollectionRules/<id>/streams/<stream>?api-version=2023-01-01`.
+* Columns: `TimeGenerated`, `EventId`, `DeliveryId`, `Severity`, `DetectionSource`, `TokenType`,
+  `DecoyId`, `DecoyLabel`, `Project`, `SourceIp`, `HttpMethod`, `RequestPath`, `AttackTechniques`
+  (comma-separated ids) and `AttackTechniqueNames`.
+* Only the Azure public cloud (`*.ingest.monitor.azure.com`) is supported.
+
+Query the table with `HoneyShield_CL | where Severity == "CRITICAL"`, or base a Sentinel analytics
+rule on it. Both the token request and the upload go through the webhook transport's SSRF checks
+and address pinning.
 
 **PagerDuty:** create an *Events API v2* integration on the service that should be paged and use
 its Integration Key. Each detection is a `trigger` with `dedup_key` `honeyshield-<event id>`, so a
@@ -123,9 +190,9 @@ multi-tenant SaaS deployment.
 
 ## Not included
 
-Vendor-specific SIEM APIs (Splunk HEC tokens, Sentinel DCR): use syslog/CEF or the signed JSON
-webhook. Opsgenie and other paging services: their generic webhook integrations accept the signed
-JSON webhook.
+Other SIEM-specific APIs (QRadar, Elastic, Chronicle): use syslog/CEF or the signed JSON webhook.
+Opsgenie and other paging services: their generic webhook integrations accept the signed JSON
+webhook. Sentinel in Azure Government or Azure operated by 21Vianet is not supported yet.
 
 Verification:
 * The test suite uses a real SMTP server and a real TLS syslog listener on loopback.

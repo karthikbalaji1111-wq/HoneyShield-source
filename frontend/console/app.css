@@ -718,6 +718,9 @@ tr.clickable:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--acce
 
 /* bait-file downloads in the artifact panel; ATT&CK techniques in the event drawer */
 .bait-files { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+#generate-form [name=account_name] { width: 190px; }
+.artifact ol.steps { margin: 8px 0 12px; padding-left: 20px; color: var(--ink-2); }
+.artifact ol.steps li { margin: 4px 0; }
 .attack { display: flex; flex-direction: column; gap: 2px; }
 .attack a { color: var(--accent-ink); text-decoration: none; }
 .attack a:hover { text-decoration: underline; text-underline-offset: 3px; }

@@ -25,7 +25,7 @@ server, losing the server loses the backups' only key.
 To make a key yourself:
 
 ```bash
-docker run --rm --network none ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.4.0 \
+docker run --rm --network none ghcr.io/karthikbalaji1111-wq/honeyshield-backend:1.5.0 \
   python -m app.workers.backup keygen > backup-key.txt
 ```
 

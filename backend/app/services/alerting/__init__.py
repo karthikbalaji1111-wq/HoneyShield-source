@@ -18,6 +18,7 @@ import logging
 import random
 import time
 import urllib.parse
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -29,7 +30,7 @@ from app.models.alerting import AlertDestination, AlertFormat, OutboxEvent, Outb
 from app.models.detection_event import DetectionEvent
 from app.models.enums import EventSeverity
 from app.models.honey_token import HoneyToken
-from app.services.alerting import channels, pagerduty, webhook
+from app.services.alerting import channels, pagerduty, siem, webhook
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def event_data(event: DetectionEvent, delivery_id: int) -> dict[str, Any]:
         "request_path": (event.request_path or "").replace(token.token_value, "{token}"),
         "triggered_at": triggered.isoformat() if triggered else None,
         "triggered_ms": int(triggered.timestamp() * 1000) if triggered else None,
-        "attack": [{"id": t["id"], "name": t["name"]} for t in techniques_for(token.token_type.value)],
+        "attack": [{"id": t["id"], "name": t["name"]} for t in techniques_for(token.token_type.value, event.request_path)],
     }
 
 
@@ -138,6 +139,12 @@ def check_destination(url: str, fmt: AlertFormat, settings: Any, *, resolve: boo
         # as any webhook (it is a fixed public host, but the resolve-and-pin still applies).
         return webhook.validate_url(pagerduty.parse_url(url).endpoint, resolver=resolver, resolve=resolve,
                                     allowed_private=allowed)
+    if fmt == AlertFormat.SPLUNK_HEC:
+        return webhook.validate_url(siem.parse_splunk(url).endpoint, resolver=resolver, resolve=resolve,
+                                    allowed_private=allowed, https_ports=siem.SPLUNK_PORTS)
+    if fmt == AlertFormat.SENTINEL:
+        return webhook.validate_url(siem.parse_sentinel(url).endpoint, resolver=resolver, resolve=resolve,
+                                    allowed_private=allowed)
     return webhook.validate_url(url, allow_http=settings.alert_allow_http_webhooks, resolver=resolver,
                                 resolve=resolve, allowed_private=allowed)
 
@@ -148,6 +155,10 @@ def destination_host(url: str, fmt: AlertFormat) -> str:
         return ",".join(sorted({a.rsplit("@", 1)[-1].lower() for a in channels.parse_mailto(url)}))
     if fmt == AlertFormat.PAGERDUTY:
         return urllib.parse.urlsplit(pagerduty.parse_url(url).endpoint).hostname or ""
+    if fmt == AlertFormat.SPLUNK_HEC:
+        return siem.parse_splunk(url).host
+    if fmt == AlertFormat.SENTINEL:
+        return siem.parse_sentinel(url).host
     return (urllib.parse.urlsplit(url).hostname or "").lower()
 
 
@@ -200,7 +211,8 @@ def _audit_dead(session: Session, row: OutboxEvent, reason: str) -> None:
 def deliver_one(session: Session, outbox_id: int, *, sender: webhook.Sender | None = None,
                 resolver: webhook.Resolver | None = None, now: datetime | None = None,
                 mailer: channels.Mailer | None = None,
-                syslog: channels.SyslogSender | None = None) -> OutboxStatus:
+                syslog: channels.SyslogSender | None = None,
+                requester: webhook.Requester | None = None) -> OutboxStatus:
     from app.core.config import get_settings
 
     settings = get_settings()
@@ -247,6 +259,8 @@ def deliver_one(session: Session, outbox_id: int, *, sender: webhook.Sender | No
     row.attempts += 1
     code: int | None = None
     error: str | None = None
+    # Codes this receiver may answer for a while and then accept (otherwise a 4xx is final).
+    retry_codes = {408, 425, 429}
     try:
         if dest.format == AlertFormat.EMAIL:
             body = channels.email_body(data)
@@ -258,6 +272,35 @@ def deliver_one(session: Session, outbox_id: int, *, sender: webhook.Sender | No
             frame = channels.syslog_frame(channels.cef_message(data), data["severity"],
                                           settings.ingest_hostname or "honeyshield", f"hs-{row.id}", now)
             (syslog or channels.syslog_sender)(target, frame, timeout)
+        elif dest.format == AlertFormat.SPLUNK_HEC:
+            hec = siem.parse_splunk(dest.url)
+            body_bytes = json.dumps(siem.splunk_body(data, hec.index, settings.ingest_hostname or "honeyshield"),
+                                    separators=(",", ":")).encode()
+            headers = {"Content-Type": "application/json", "User-Agent": "HoneyShield-Alerts/1",
+                       "Authorization": f"Splunk {hec.token}",
+                       "X-Splunk-Request-Channel": siem.splunk_channel(dest.public_id)}
+            code = (sender or webhook.http_sender)(target, headers, body_bytes, timeout)
+            if not 200 <= code < 300:
+                error = f"HTTP {code}"
+        elif dest.format == AlertFormat.SENTINEL:
+            az = siem.parse_sentinel(dest.url)
+            try:
+                token = siem.TOKENS.get(az, requester or webhook.http_request, resolver, timeout,
+                                        settings.alert_private_networks)
+            except siem.TokenError as exc:
+                if exc.permanent:
+                    raise channels.PermanentDeliveryError(str(exc)) from exc
+                raise
+            body_bytes = json.dumps([siem.sentinel_record(data)], separators=(",", ":")).encode()
+            headers = {"Content-Type": "application/json", "User-Agent": "HoneyShield-Alerts/1",
+                       "Authorization": f"Bearer {token}", "x-ms-client-request-id": str(uuid.uuid4())}
+            code = (sender or webhook.http_sender)(target, headers, body_bytes, timeout)
+            if code == 401:
+                siem.TOKENS.forget(az)  # expired or revoked early: fetch a new one next time
+            # A new role assignment on the DCR takes up to 30 minutes to apply (403 until then).
+            retry_codes = retry_codes | {401, 403}
+            if not 200 <= code < 300:
+                error = f"HTTP {code}"
         else:
             body_bytes = json.dumps(build_payload(row.detection_event, dest, row.id, data), separators=(",", ":")).encode()
             headers = {
@@ -274,10 +317,10 @@ def deliver_one(session: Session, outbox_id: int, *, sender: webhook.Sender | No
     except channels.PermanentDeliveryError as exc:
         return finish(OutboxStatus.DEAD, f"rejected: {exc}")
     except Exception as exc:  # network failure: retry
-        code, error = None, f"{type(exc).__name__}"
+        code, error = None, (str(exc) if isinstance(exc, siem.TokenError) else f"{type(exc).__name__}")
     if error is None:
         return finish(OutboxStatus.DELIVERED, code=code)
-    if code is not None and 400 <= code < 500 and code not in (408, 425, 429):
+    if code is not None and 400 <= code < 500 and code not in retry_codes:
         return finish(OutboxStatus.DEAD, error, code)  # receiver rejected it; retrying will not help
     if row.attempts >= settings.alert_max_attempts:
         return finish(OutboxStatus.DEAD, f"retries exhausted ({error})", code)
@@ -292,14 +335,15 @@ def deliver_one(session: Session, outbox_id: int, *, sender: webhook.Sender | No
 
 def run_once(session: Session, *, sender: webhook.Sender | None = None,
              resolver: webhook.Resolver | None = None, batch: int | None = None,
-             mailer: channels.Mailer | None = None, syslog: channels.SyslogSender | None = None) -> dict[str, int]:
+             mailer: channels.Mailer | None = None, syslog: channels.SyslogSender | None = None,
+             requester: webhook.Requester | None = None) -> dict[str, int]:
     from app.core.config import get_settings
 
     results: dict[str, int] = {}
     for outbox_id in claim_due(session, batch or get_settings().alert_worker_batch_size):
         try:
             status = deliver_one(session, outbox_id, sender=sender, resolver=resolver, mailer=mailer,
-                                 syslog=syslog)
+                                 syslog=syslog, requester=requester)
         except Exception:
             logger.exception("Alert delivery %s crashed; lease will expire and it will be retried", outbox_id)
             session.rollback()

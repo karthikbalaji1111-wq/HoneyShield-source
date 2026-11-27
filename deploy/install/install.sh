@@ -10,7 +10,7 @@
 #     bash -c "$(curl -fsSL .../install.sh)" -- --control-host app.example.com --ingest-host ingest.example.com --email you@example.com
 #
 #   Upgrade an existing installation to another version (keeps data and settings):
-#     ~/honeyshield/install.sh --upgrade --version 1.4.0
+#     ~/honeyshield/install.sh --upgrade --version 1.5.0
 #
 # Options:
 #   --dir DIR             where to install (default: ~/honeyshield)
@@ -39,7 +39,7 @@
 # Works with the bash 3.2 that macOS ships. Never prints a secret.
 set -euo pipefail
 
-HS_VERSION_DEFAULT="1.4.0"
+HS_VERSION_DEFAULT="1.5.0"
 # Run from an installation as <dir>/install.sh (or <dir>/deploy/install/install.sh), the default
 # directory is that installation, so "<dir>/install.sh --upgrade" upgrades <dir>. An installation is
 # recognised by its .env, docker-compose.yml and the install.sh link (a source checkout has no such

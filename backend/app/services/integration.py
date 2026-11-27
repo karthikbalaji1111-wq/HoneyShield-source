@@ -247,7 +247,8 @@ class IntegrationReportService:
             return None
         return event
 
-    def _touch(self, cred: IntegrationCredential) -> None:
+    @staticmethod
+    def _touch(cred: IntegrationCredential) -> None:
         now = datetime.now(timezone.utc)
         last = cred.last_used_at
         if last is not None and last.tzinfo is None:

@@ -72,7 +72,9 @@ class ValidatedTarget:
 
 
 def validate_url(url: str, allow_http: bool = False, resolver: Resolver | None = None,
-                 resolve: bool = True, allowed_private: tuple = ()) -> ValidatedTarget:
+                 resolve: bool = True, allowed_private: tuple = (),
+                 https_ports: frozenset[int] | set[int] | None = None) -> ValidatedTarget:
+    """``https_ports`` replaces the allowed https ports (Splunk's event collector listens on 8088)."""
     resolver = resolver or default_resolver
     if len(url) > 2048:
         raise UnsafeWebhookURL("URL too long")
@@ -91,7 +93,7 @@ def validate_url(url: str, allow_http: bool = False, resolver: Resolver | None =
         port = parts.port or (443 if scheme == "https" else 80)
     except ValueError as exc:
         raise UnsafeWebhookURL("Invalid port") from exc
-    if port not in (ALLOWED_HTTPS_PORTS if scheme == "https" else ALLOWED_HTTP_PORTS):
+    if port not in ((https_ports or ALLOWED_HTTPS_PORTS) if scheme == "https" else ALLOWED_HTTP_PORTS):
         raise UnsafeWebhookURL("Webhook port is not allowed")
     if host in ("localhost",) or host.endswith((".localhost", ".local", ".internal", ".home.arpa")):
         raise UnsafeWebhookURL("Webhook host is not public")
@@ -145,10 +147,13 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
 
 
 Sender = Callable[[ValidatedTarget, dict[str, str], bytes, float], int]
+#: Like Sender, but also returns the start of the response body (an OAuth token response).
+Requester = Callable[[ValidatedTarget, dict[str, str], bytes, float], tuple[int, bytes]]
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
-def http_sender(target: ValidatedTarget, headers: dict[str, str], body: bytes, timeout: float) -> int:
-    """POST to the first validated address. Returns the status code; raises OSError on failure."""
+def http_request(target: ValidatedTarget, headers: dict[str, str], body: bytes, timeout: float) -> tuple[int, bytes]:
+    """POST to the first validated address; returns (status, up to 64 KiB of the body). Raises OSError."""
     address = target.addresses[0]
     if target.scheme == "https":
         conn = _PinnedHTTPSConnection(target.host, address, target.port, timeout, tls.client_context())
@@ -157,7 +162,11 @@ def http_sender(target: ValidatedTarget, headers: dict[str, str], body: bytes, t
     try:
         conn.request("POST", target.path, body=body, headers=headers)
         resp = conn.getresponse()
-        resp.read(4096)
-        return resp.status
+        return resp.status, resp.read(MAX_RESPONSE_BYTES)
     finally:
         conn.close()
+
+
+def http_sender(target: ValidatedTarget, headers: dict[str, str], body: bytes, timeout: float) -> int:
+    """POST to the first validated address. Returns the status code; raises OSError on failure."""
+    return http_request(target, headers, body, timeout)[0]

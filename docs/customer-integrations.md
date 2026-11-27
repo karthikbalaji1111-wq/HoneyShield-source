@@ -10,6 +10,7 @@ Used by decoys whose use only the customer's own code can observe:
 |---|---|---|
 | `API_KEY` | SHA-256 of a presented credential matches a manifest entry | CRITICAL |
 | `FORM_FIELD` | the honeypot field (`field_name`) was submitted non-empty | MEDIUM |
+| `AD_ACCOUNT` | a domain controller logged an event naming the decoy account ([§6](#directory-decoys)) | CRITICAL / HIGH |
 
 Use of a decoy key against third-party services, and decoys copied but never used, are **not
 detectable**.
@@ -98,3 +99,41 @@ project only. An outage of HoneyShield delays reports but does not lose them: th
 keeps and retries them, with the same idempotency key so nothing is stored twice. Reports are lost
 only if the queue overflows (10,000 by default) or the customer's process crashes before reporting;
 with `spool_path`, a graceful restart keeps them.
+
+<a id="directory-decoys"></a>
+## 6. Directory decoys (Active Directory)
+
+[Active Directory decoys](active-directory-decoys.md) use the same credentials and signing, with
+their own two endpoints. The shipped collector is `HoneyShield-DCCollector.ps1` (the decoy's
+`dc-collector` file).
+
+`GET /integrations/v1/directory-manifest` lists one entry per account name: the active decoy, or
+the newest revoked one if none is active. Calling it updates the credential's *last used* time, so
+the console shows that a controller checked in.
+```json
+{"version":1,"generated_at":"…","decoys":[
+  {"decoy_id":"dcy_…","account_name":"svc_sqlbackup","spn":"MSSQLSvc/sqlbak01:1433","audit_reads":false,"is_active":true}]}
+```
+
+`POST /integrations/v1/directory-events` carries one Windows Security event. It is at most 16 KiB,
+and unknown fields are rejected.
+
+| Field | Required | Rules |
+|---|---|---|
+| `decoy_id`, `idempotency_key`, `observed_at` | yes | as for `/events` |
+| `windows_event_id` | yes | 4624, 4625, 4662, 4768, 4769, 4771 or 4776 |
+| `succeeded` | yes | `true` for Audit Success, `false` for Audit Failure |
+| `domain_controller` | yes | host name of the controller that logged it |
+| `target_name` | yes | the account the event names (`ServiceName` for 4769); it must be the decoy's account, compared case-insensitively and without any `DOMAIN\` or `@realm` part; otherwise `422` |
+| `source_ip` | no | `IpAddress`; `::ffff:` IPv4 addresses are unwrapped; when it is absent, `0.0.0.0` is stored |
+| `workstation` | no | `WorkstationName` or `Workstation` |
+| `actor` | no | the requesting account (4769 `TargetUserName`) or the reader (4662 `SubjectDomainName\SubjectUserName`) |
+| `status` | no | `Status` (`SubStatus` for 4625), e.g. `0x18` |
+| `logon_type` | no | 0-13 |
+| `ticket_encryption` | no | `TicketEncryptionType`, e.g. `0x17` |
+| `record_id` | no | `EventRecordID` |
+
+Text fields reject control characters. HoneyShield derives the event's request (`AD ad/<kind>`),
+severity and ATT&CK technique from `windows_event_id` and `succeeded`, never from the reporter.
+Responses and rate limits are as for `/events`. An AD decoy cannot be reported through `/events`,
+and an HTTP decoy cannot be reported through `/directory-events`. Both are accepted and not stored.

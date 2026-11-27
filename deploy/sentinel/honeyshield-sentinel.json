@@ -1,0 +1,227 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "HoneyShield alerts in Microsoft Sentinel: the HoneyShield_CL table and a data collection rule with its own logs-ingestion endpoint. Deploy into the resource group of the Sentinel (Log Analytics) workspace, then give the HoneyShield Entra application the Monitoring Metrics Publisher role on the rule. See docs/alerting-and-outbox.md."
+  },
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "The Log Analytics workspace Microsoft Sentinel uses (in this resource group)."
+      }
+    },
+    "dataCollectionRuleName": {
+      "type": "string",
+      "defaultValue": "honeyshield-alerts"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "The workspace's region."
+      }
+    }
+  },
+  "variables": {
+    "stream": "Custom-HoneyShield",
+    "table": "HoneyShield_CL",
+    "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('workspaceName'), '/', variables('table'))]",
+      "properties": {
+        "schema": {
+          "name": "[variables('table')]",
+          "columns": [
+            {
+              "name": "TimeGenerated",
+              "type": "datetime",
+              "description": "When the decoy was triggered (UTC)."
+            },
+            {
+              "name": "EventId",
+              "type": "long",
+              "description": "HoneyShield detection event id (0 for a test alert)."
+            },
+            {
+              "name": "DeliveryId",
+              "type": "long",
+              "description": "HoneyShield delivery id; a retried delivery repeats it."
+            },
+            {
+              "name": "Severity",
+              "type": "string",
+              "description": "LOW, MEDIUM, HIGH or CRITICAL."
+            },
+            {
+              "name": "DetectionSource",
+              "type": "string",
+              "description": "PUBLIC_INGEST, CUSTOMER_HOOK, CLOUD_AUDIT, MANUAL or TEST."
+            },
+            {
+              "name": "TokenType",
+              "type": "string",
+              "description": "Decoy type, e.g. AWS_KEY, DNS, AD_ACCOUNT."
+            },
+            {
+              "name": "DecoyId",
+              "type": "string",
+              "description": "Public decoy id (dcy_...)."
+            },
+            {
+              "name": "DecoyLabel",
+              "type": "string",
+              "description": "Decoy label."
+            },
+            {
+              "name": "Project",
+              "type": "string",
+              "description": "Protected project (domain)."
+            },
+            {
+              "name": "SourceIp",
+              "type": "string",
+              "description": "Source address."
+            },
+            {
+              "name": "HttpMethod",
+              "type": "string",
+              "description": "Request method, or AD / AWS for directory and cloud events."
+            },
+            {
+              "name": "RequestPath",
+              "type": "string",
+              "description": "Request path, or the event kind (e.g. ad/service-ticket)."
+            },
+            {
+              "name": "AttackTechniques",
+              "type": "string",
+              "description": "MITRE ATT&CK technique ids, comma-separated."
+            },
+            {
+              "name": "AttackTechniqueNames",
+              "type": "string",
+              "description": "MITRE ATT&CK techniques with names."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "[parameters('dataCollectionRuleName')]",
+      "location": "[parameters('location')]",
+      "kind": "Direct",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', parameters('workspaceName'), variables('table'))]"
+      ],
+      "properties": {
+        "streamDeclarations": {
+          "Custom-HoneyShield": {
+            "columns": [
+              {
+                "name": "TimeGenerated",
+                "type": "datetime"
+              },
+              {
+                "name": "EventId",
+                "type": "long"
+              },
+              {
+                "name": "DeliveryId",
+                "type": "long"
+              },
+              {
+                "name": "Severity",
+                "type": "string"
+              },
+              {
+                "name": "DetectionSource",
+                "type": "string"
+              },
+              {
+                "name": "TokenType",
+                "type": "string"
+              },
+              {
+                "name": "DecoyId",
+                "type": "string"
+              },
+              {
+                "name": "DecoyLabel",
+                "type": "string"
+              },
+              {
+                "name": "Project",
+                "type": "string"
+              },
+              {
+                "name": "SourceIp",
+                "type": "string"
+              },
+              {
+                "name": "HttpMethod",
+                "type": "string"
+              },
+              {
+                "name": "RequestPath",
+                "type": "string"
+              },
+              {
+                "name": "AttackTechniques",
+                "type": "string"
+              },
+              {
+                "name": "AttackTechniqueNames",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[variables('workspaceId')]",
+              "name": "sentinel"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "[variables('stream')]"
+            ],
+            "destinations": [
+              "sentinel"
+            ],
+            "transformKql": "source",
+            "outputStream": "[concat('Custom-', variables('table'))]"
+          }
+        ]
+      }
+    }
+  ],
+  "outputs": {
+    "dataCollectionRuleImmutableId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), '2023-03-11').immutableId]"
+    },
+    "logsIngestionEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), '2023-03-11').endpoints.logsIngestion]"
+    },
+    "streamName": {
+      "type": "string",
+      "value": "[variables('stream')]"
+    },
+    "dataCollectionRuleId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]"
+    }
+  }
+}

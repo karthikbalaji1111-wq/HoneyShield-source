@@ -12,6 +12,7 @@ class HoneyTokenType(str, PyEnum):
     DNS = "DNS"
     AWS_KEY = "AWS_KEY"
     DOCUMENT = "DOCUMENT"
+    AD_ACCOUNT = "AD_ACCOUNT"
 
 
 class EventSeverity(str, PyEnum):

@@ -3,6 +3,53 @@
 Versions follow [Semantic Versioning](https://semver.org). The Helm chart's `appVersion` and the
 release tag (`vX.Y.Z`) always match; the release workflow refuses a tag that does not.
 
+## 1.5.0 — 2026-11-27
+
+### Added
+* **Active Directory decoys** (`AD_ACCOUNT`): a domain account nobody uses, with a password nobody
+  knows. By default it also has an SPN, which makes it a Kerberoasting target. The decoy's setup
+  script creates the account on a domain controller with a random password generated there.
+  `HoneyShield-DCCollector.ps1` runs every minute as a scheduled task on each domain controller. It
+  reads the Security log for events naming a decoy account and reports them through the signed
+  customer-integration channel, using two new endpoints: `GET /integrations/v1/directory-manifest`
+  and `POST /integrations/v1/directory-events`. The following are reported as CRITICAL:
+  * Kerberos service tickets for the decoy (4769, T1558.003);
+  * failed Kerberos, NTLM and interactive sign-ins (4771, 4768, 4776, 4625, T1110);
+  * any successful sign-in (T1078.002).
+
+  Reads of the account object (4662, T1087.002) are reported as HIGH when you turn on read
+  auditing. The decoy needs `INTEGRATION_SIGNING_KEY`. See `docs/active-directory-decoys.md`.
+* ATT&CK labels can depend on the event as well as the decoy type: an AD decoy's event is labelled
+  with the technique its Windows event shows, in the API, in alerts and in CEF.
+* **Splunk and Microsoft Sentinel alert destinations** (`SPLUNK_HEC`, `SENTINEL`). Alerts go
+  straight into the SIEM, with no syslog receiver in between:
+  * *Splunk* receives one JSON event per alert through the HTTP Event Collector (sourcetype
+    `honeyshield:detection`, optional index). It works with Splunk Enterprise on port 8088 and
+    Splunk Cloud on 443.
+  * *Microsoft Sentinel* receives a row in a `HoneyShield_CL` table through the Azure Monitor Logs
+    Ingestion API, using an Entra application and client credentials.
+    `deploy/sentinel/honeyshield-sentinel.json` creates the table and the data collection rule.
+
+  Tokens and client secrets are masked in API responses and the console. Delivery uses the
+  webhook transport's SSRF checks and address pinning. See `docs/alerting-and-outbox.md`.
+
+### Changed
+* The console's event drawer calls the context section *Directory event* or *Cloud event* when the
+  event is not an HTTP request.
+
+### Upgrade notes
+* `~/honeyshield/install.sh --upgrade --version 1.5.0` (or `<dir>/install.sh --upgrade --version
+  1.5.0` for an installation made with `--dir`).
+* No database migrations and no new settings. Active Directory decoys use the existing
+  `INTEGRATION_SIGNING_KEY`. Splunk and Sentinel destinations need outbound HTTPS from the alert
+  worker, as webhooks already do.
+* Not yet verified outside the test suite:
+  * the domain controller scripts, against a real Active Directory;
+  * Splunk and Sentinel delivery, against real accounts;
+  * the Sentinel ARM template, which has not been deployed.
+
+  Each is tested end to end against simulated counterparts. Report anything that differs.
+
 ## 1.4.0 — 2026-11-26
 
 ### Added

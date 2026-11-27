@@ -10,6 +10,9 @@ real thing, so planting a decoy is a download and a copy, not a hand-edit.
   what is in front, so an alert says which file was used.
 * API key decoy: ``production.env``.
 * Document decoy: the Word document.
+* Active Directory decoy: not bait but the two scripts that set it up. ``setup-script`` creates the
+  account on a domain controller; ``dc-collector`` is the collector every domain controller runs
+  (the same script for every AD decoy, with this installation's ingest host filled in).
 
 Everything other than the decoy (database passwords, secret keys) is filler derived from the
 decoy's value: realistic, never valid anywhere, and the same on every download.
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import datetime, timezone
 
 from app.core.exceptions import ValidationError
@@ -32,7 +36,10 @@ KINDS: dict[HoneyTokenType, tuple[str, ...]] = {
     HoneyTokenType.DNS: ("kubeconfig", "ssh-config", "env"),
     HoneyTokenType.API_KEY: ("env",),
     HoneyTokenType.DOCUMENT: ("docx",),
+    HoneyTokenType.AD_ACCOUNT: ("setup-script", "dc-collector"),
 }
+
+AD_SCRIPTS = Path(__file__).resolve().parent.parent / "assets" / "active_directory"
 
 # What each DNS bait file puts in front of the decoy's host name.
 DNS_TAGS = {"kubeconfig": "k8s-prod", "ssh-config": "bastion", "env": "db"}
@@ -182,6 +189,39 @@ def _docx(token: HoneyToken) -> bytes:
                                 author=author, created=created)
 
 
+def _ps_quote(value: object) -> str:
+    """Text for inside a PowerShell single-quoted string (the generator already allows only ASCII)."""
+    return str(value or "").replace("'", "''")
+
+
+def _powershell(name: str, values: dict[str, str]) -> bytes:
+    text = (AD_SCRIPTS / name).read_text(encoding="ascii")
+    for key, value in values.items():
+        text = text.replace("{{" + key + "}}", value)
+    # Windows PowerShell 5.1 reads a BOM-less file as the ANSI code page: keep it ASCII, with CRLF.
+    return text.replace("\r\n", "\n").replace("\n", "\r\n").encode("ascii")
+
+
+def _ad_setup_script(token: HoneyToken) -> bytes:
+    meta = token.token_metadata or {}
+    return _powershell("New-HoneyShieldDecoy.ps1", {
+        "DECOY_ID": token.decoy_id,
+        "ACCOUNT_NAME": _ps_quote(meta.get("account_name")),
+        "DISPLAY_NAME": _ps_quote(meta.get("display_name") or meta.get("account_name")),
+        "DESCRIPTION": _ps_quote(meta.get("description")),
+        "SPN": _ps_quote(meta.get("spn")),
+        "AUDIT_READS": "$true" if meta.get("audit_reads") else "$false",
+        "ADMIN_COUNT": "$false" if meta.get("admin_count") is False else "$true",
+    })
+
+
+def _dc_collector() -> bytes:
+    from app.core.config import get_settings
+
+    base = (get_settings().public_ingest_base_url or "").rstrip("/")
+    return _powershell("HoneyShield-DCCollector.ps1", {"BASE_URL": _ps_quote(base)})
+
+
 def render(token: HoneyToken, kind: str) -> BaitFile:
     """The bait file ``kind`` for ``token``. Raises ValidationError if this decoy has no such file."""
     if kind not in kinds_for(token):
@@ -194,5 +234,10 @@ def render(token: HoneyToken, kind: str) -> BaitFile:
         return BaitFile("kubeconfig", TEXT, _kubeconfig(token).encode())
     if kind == "ssh-config":
         return BaitFile("ssh_config", TEXT, _ssh_config(token).encode())
+    if kind == "setup-script":
+        name = (token.token_metadata or {}).get("account_name") or "account"
+        return BaitFile(f"New-HoneyShieldDecoy-{name}.ps1", TEXT, _ad_setup_script(token))
+    if kind == "dc-collector":
+        return BaitFile("HoneyShield-DCCollector.ps1", TEXT, _dc_collector())
     filename = (token.token_metadata or {}).get("filename") or "Document.docx"
     return BaitFile(filename, documents.DOCX_MIME, _docx(token))

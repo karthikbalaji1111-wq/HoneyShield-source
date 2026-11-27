@@ -38,6 +38,9 @@ def _require_type_configured(token_type: HoneyTokenType, settings) -> None:
     if token_type == HoneyTokenType.AWS_KEY and not settings.aws_canary_enabled:
         raise ValidationError("AWS key decoys are not set up on this installation "
                               "(AWS_CANARY_ENABLED, docs/cloud-canaries.md)")
+    if token_type == HoneyTokenType.AD_ACCOUNT and not settings.integration_signing_key:
+        raise ValidationError("Active Directory decoys report through customer integrations, which are not set "
+                              "up on this installation (INTEGRATION_SIGNING_KEY, docs/active-directory-decoys.md)")
 
 
 class HoneyTokenService(BaseService):
@@ -201,10 +204,14 @@ class HoneyTokenService(BaseService):
             ingest_base_url = settings.public_ingest_base_url
             _require_type_configured(token_type, settings)
 
+            params = dict(params or {})
+            if token_type == HoneyTokenType.AD_ACCOUNT:
+                params["avoid_names"] = sorted(self._ad_names(project_id))
+
             # Try up to 3 times to generate a globally unique token
             for _ in range(3):
                 generated = generator.generate(
-                    project_domain, params or {}, ingest_base_url=ingest_base_url,
+                    project_domain, params, ingest_base_url=ingest_base_url,
                     paths=_decoy_paths(), dns_zone=settings.dns_token_zone,
                 )
                 
@@ -215,6 +222,8 @@ class HoneyTokenService(BaseService):
                 # Check if generated value already exists before attempting insert
                 if self.token_repo.get_by_token(generated.token_value):
                     continue
+                if token_type == HoneyTokenType.AD_ACCOUNT and self._ad_name_taken(project_id, generated.metadata):
+                    raise ValidationError("This project already has an Active Directory decoy with that account name")
 
                 try:
                     token = self.token_repo.create(
@@ -265,6 +274,19 @@ class HoneyTokenService(BaseService):
             except Exception:
                 pass
             raise
+
+    def _ad_names(self, project_id: int) -> set[str]:
+        """Account names (lower case) of the project's active Active Directory decoys."""
+        from sqlalchemy import select
+
+        stmt = select(HoneyToken.token_metadata).where(
+            HoneyToken.project_id == project_id, HoneyToken.token_type == HoneyTokenType.AD_ACCOUNT,
+            HoneyToken.is_active.is_(True))
+        return {str((m or {}).get("account_name") or "").lower() for m in self.session.scalars(stmt)} - {""}
+
+    def _ad_name_taken(self, project_id: int, metadata: dict[str, Any] | None) -> bool:
+        """Domain controllers report by account name, so one project cannot have two decoys with one name."""
+        return str((metadata or {}).get("account_name") or "").lower() in self._ad_names(project_id)
 
     def get_by_decoy_id(self, decoy_id: str) -> HoneyToken:
         """An active decoy of the caller's tenant by its public id (not found for any other tenant)."""
@@ -359,6 +381,10 @@ class HoneyTokenService(BaseService):
         generator = GENERATOR_REGISTRY.get(old_token.token_type)
         old_meta = old_token.token_metadata or {}
         params = {k: old_meta[k] for k in ("provider_style", "field_name", "profile_name") if k in old_meta}
+        if old_token.token_type == HoneyTokenType.AD_ACCOUNT:
+            # The account lives in the customer's directory: the replacement decoy watches the same one.
+            params = {k: old_meta.get(k) for k in ("account_name", "display_name", "description", "audit_reads", "admin_count")}
+            params["spn"] = old_meta.get("spn") or False
         for _ in range(3):
             settings = get_settings()
             _require_type_configured(old_token.token_type, settings)

@@ -15,6 +15,7 @@ recording triggers as evidence.
 | DNS | host name `<value>.<DNS_TOKEN_ZONE>` ([docs/dns-tokens.md](dns-tokens.md)) | HoneyShield's name server (PUBLIC_INGEST) | HIGH | security products and mail filters that resolve names they find |
 | DOCUMENT | Word file that loads `https://<ingest>/px/<value>.gif` as a linked picture ([docs/document-decoys.md](document-decoys.md)) | HoneyShield (PUBLIC_INGEST) | HIGH | document indexers or DLP scanners that render files they find; the owner opening it by mistake |
 | AWS_KEY | real AWS access key with a deny-all policy ([docs/cloud-canaries.md](cloud-canaries.md)) | AWS CloudTrail, read by the cloud-canary worker (CLOUD_AUDIT) | CRITICAL | AWS's own leaked-key scanning attaching its quarantine policy (not a use of the key) |
+| AD_ACCOUNT | domain account with an unknown password and, by default, an SPN ([docs/active-directory-decoys.md](active-directory-decoys.md)) | the collector on each domain controller (CUSTOMER_HOOK) | CRITICAL (HIGH for reads) | administrators testing it; with read auditing, sync, inventory and backup tools that read every account |
 
 ## Placement
 

@@ -19,6 +19,8 @@ class AlertFormat(str, PyEnum):
     EMAIL = "EMAIL"              # mailto:a@b,c@d through the operator's SMTP relay
     SYSLOG_CEF = "SYSLOG_CEF"    # syslog+tls://siem:6514, RFC 5424/5425 with an ArcSight CEF body
     PAGERDUTY = "PAGERDUTY"      # pagerduty://<routing key>, Events API v2 (pagerduty+eu:// for the EU region)
+    SPLUNK_HEC = "SPLUNK_HEC"    # splunk://<HEC token>@host[:8088], Splunk HTTP Event Collector
+    SENTINEL = "SENTINEL"        # sentinel://<client id>:<secret>@<DCR ingestion host>/<dcr>/<stream>?tenant=
 
 
 class OutboxStatus(str, PyEnum):

@@ -1,308 +1,175 @@
 # HoneyShield
 
-**Install on your server with one command:**
+HoneyShield catches people who are somewhere they should not be.
 
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/karthikbalaji1111-wq/HoneyShield-source/main/deploy/install/install.sh)" -- \
-  --control-host app.example.com --ingest-host cdn.example.com --email you@example.com
-```
+The idea is simple. You leave bait in places nobody has a real reason to touch. That could be a link hidden in an old config file, a fake API key in a repository, a Word document with a tempting name, or a domain account that nobody uses. Normal users never go near these things. So when one of them gets touched, it is almost always someone poking around, and HoneyShield tells you right away.
 
-Replace the two host names with two DNS names that point at your server, and the email with the
-first administrator's address. To try it on your own computer first, leave the options out:
+It runs on your own server. Your data stays with you.
 
-```bash
+It is free to use, including at work. The license section at the end has the details.
+
+
+## Installing it
+
+You need a Linux server with Docker, about 2 GB of memory, ports 80 and 443 open, and two domain names pointing at the server. One name is for the console you log in to. The other is for the bait. Give the bait one an ordinary name like cdn or assets, not something like honeypot.
+
+Then run this one command on the server, with your own names and email:
+
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/karthikbalaji1111-wq/HoneyShield-source/main/deploy/install/install.sh)" -- --control-host app.example.com --ingest-host cdn.example.com --email you@example.com
+
+If you just want to try it on your own computer first, run it without the options:
+
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/karthikbalaji1111-wq/HoneyShield-source/main/deploy/install/install.sh)"
-```
 
-Free for everyone ([licence](#licence)). The full source code is in this repository, the release
-images are built from it with a signed build record, and [every claim can be checked
-yourself](docs/verify-it-yourself.md).
+The installer checks Docker, downloads what it needs, makes all the passwords and secrets for you, starts everything, and asks you to pick the admin password. It also creates a file called backup-key.txt. Copy that file somewhere safe off the server straight away, because your backups cannot be restored without it.
 
+When it is done, open https://your-control-host/console/ and log in. On your own computer that is https://app.localhost:8443/console/ and your browser will warn about the certificate. That is expected, because it is a self-signed one.
 
-## What HoneyShield does
+The installer starts with a temporary certificate. To get a real one from Let's Encrypt, follow docs/deploy-oracle-free.md. That guide works for any Ubuntu server, not only Oracle.
 
-HoneyShield catches intruders with bait. You plant decoys in places no legitimate person or system
-has a reason to touch: a hidden URL in a config comment, a fake API key in an old repository, a
-tracking pixel in a document nobody should open, an invisible field in a login form. When something
-touches one of them, that is not noise to be tuned out. It is a strong sign that someone is looking
-where they should not be, and HoneyShield records exactly what happened, keeps the record in a form
-that can stand up as evidence, and tells your team.
+To upgrade later and keep all your data:
 
-It runs entirely on your own server. Your detection data never leaves it.
+~/honeyshield/install.sh --upgrade --version 1.5.0
+
+If you use Kubernetes, there is a Helm chart in deploy/helm/honeyshield and the steps are in docs/kubernetes.md.
 
 
-## What the install command does
+## The kinds of bait
 
-1. Checks that Docker and the Compose plugin are installed and running.
-2. Downloads the deployment files from this repository into `~/honeyshield` (not the whole source).
-3. Generates every password and secret, unique to your installation.
-4. Downloads the ready-made HoneyShield images (for x86 and ARM servers) and starts everything.
-5. Waits until it is healthy and asks for the first administrator's password.
-6. Creates `backup-key.txt`. **Copy it off the server straight away**: backups are encrypted to
-   it and cannot be restored without it.
+You make a project for each app or network you want to protect, and then make bait for it. There are nine kinds right now.
 
-Then open `https://<control host>/console/` and sign in. On your own computer that is
-https://app.localhost:8443/console/ (accept the certificate warning; the certificate is self-signed).
+- A hidden URL. A web address that only shows up where an intruder would look, like a commented-out line in a config file.
+- A hidden link. The same thing, tucked inside a web page where normal visitors never see it.
+- A tracking pixel. A tiny image for fake emails and documents. Opening them sets it off.
+- A fake API key. It looks real. You leave it in config files or old code.
+- A form honeypot. An invisible form field. People never fill it in, bots do.
+- A Word document. A file with a juicy name that reports when someone opens it.
+- A DNS name. Any lookup of it gets recorded, even from networks that block almost everything. You need a domain you can point at HoneyShield for this one.
+- An AWS key. A real key that cannot do anything. Any use of it shows up in AWS's own logs. You need a spare AWS account for this one.
+- An Active Directory account. A fake domain account with a password nobody knows. If someone tries to log in with it or tries to Kerberoast it, a small script on your domain controllers reports it. HoneyShield never connects into your network to do this.
 
-**What you need:** a Linux server with Docker and the Compose plugin (or Docker Desktop on a Mac or
-Windows to try it), about 2 GB of memory, ports 80 and 443 open, and two DNS names pointing at the
-server: one for the console, one for the decoys. Pick a decoy name that looks like ordinary
-infrastructure, such as `cdn.` or `assets.`, never `honeypot.` or `trap.`.
-
-The installer starts with a temporary certificate. For a real one from Let's Encrypt, follow step 7 of
-the [server guide](docs/deploy-oracle-free.md#7-real-https-certificates-lets-encrypt); steps 4 to 11
-of that guide apply to any Ubuntu server, not only Oracle's.
-
-**Upgrade** later, keeping all data and settings:
-
-```bash
-~/honeyshield/install.sh --upgrade --version X.Y.Z
-```
-
-On Kubernetes, use the Helm chart in `deploy/helm/honeyshield`: see [docs/kubernetes.md](docs/kubernetes.md).
+A lot of the bait can be downloaded already sitting inside the kind of file attackers go looking for, like an AWS credentials file, a .env file, a kubeconfig or an SSH config. The Active Directory bait comes with the PowerShell scripts that set it up.
 
 
-## How it works
+## What happens when bait is touched
 
-You create a project for each application you want to protect and generate decoys for it. There
-are eight kinds:
+HoneyShield records it as an event. Each event has the time, the address it came from, what was asked for, the browser or tool that was used, and which bait it was. It also records where that information came from, whether HoneyShield saw it directly, your own app reported it, or a person typed it in.
 
-- A hidden URL: a path that only shows up where an intruder would look, such as a commented-out
-  line in a config file or a `Disallow` line in robots.txt.
-- A hidden link: the same idea placed inside a page, where people browsing normally never see it.
-- A tracking pixel: a tiny image for decoy documents and decoy emails. Opening one fires it.
-- A fake API key: a credential that looks real and is planted in decoy config files or repositories.
-- A form honeypot: a field people never see, so only a bot fills it in.
-- A Word document: a file with a tempting name that reports being opened in Word.
-- A DNS host name: any lookup of it is recorded, so it works in config files and scripts with
-  nothing installed, even from networks that block everything but DNS. Needs a zone you delegate
-  to HoneyShield.
-- An AWS access key: a real key that can do nothing. Any use of it, from any tool, is read from
-  AWS CloudTrail. Needs an AWS account set aside for canaries.
+Events cannot be edited or deleted through the app. Each one is chained to the one before it, so if anything is changed later you can tell. A copy of the end of that chain is regularly saved to write-once storage outside the database.
 
-Decoys can be downloaded already inside the files intruders look for: `~/.aws/credentials`,
-`.env`, a kubeconfig, an SSH config, the Word document.
+If part of the system is down when bait is touched, the hit is not lost. The front door keeps it and records it once everything is back, with the right time, and only once. I tested this by stopping the API and then the database while sending hits, and every hit came through.
 
-URLs, links and pixels point at HoneyShield's public ingest address, so HoneyShield sees the request
-itself. Fake keys and form fields are noticed inside your own application: a small hook (a reference
-client is in `integrations/python`) reports the hit to HoneyShield with a signed, timestamped message.
-
-Every hit becomes a detection event with its time, source address, request, user agent and
-headers, the decoy it touched, and where the information came from (observed by HoneyShield,
-reported by your integration, or entered by hand). Events cannot be edited or deleted by the
-application, and each one is linked into a per-tenant hash chain, so a later change to any event is
-detectable. The chain's head is checkpointed to write-once (S3 Object Lock) storage outside the
-database.
-
-Hits are not lost when part of the system is down. If the database or every API replica is
-unavailable, the edge still answers the visitor normally and keeps the hit; once the backend is back
-it is recorded with the time the edge saw it, exactly once. This was tested by stopping the API, then
-the database, while sending hits: every one was recorded, none twice.
-
-When an event arrives, HoneyShield alerts the destinations you have set up: a signed JSON webhook,
-Slack or Microsoft Teams, email, PagerDuty, or a SIEM over syslog with TLS. Each alert names the
-MITRE ATT&CK techniques the decoy points to. Alerts go through a queue with
-retries, so a receiver that is down for a while still gets every alert once it comes back.
+Then it sends an alert to wherever you set up. That can be a signed webhook, Slack or Teams, email, PagerDuty, Splunk, Microsoft Sentinel, or any SIEM over syslog. Each alert says which MITRE ATT&CK technique the bait points to. Alerts wait in a queue and retry, so if your receiver is down for a while it still gets everything when it comes back.
 
 
-## What you get
+## What else is in it
 
-Operator console. A web console for everyday work: an overview with a fourteen-day detections chart,
-the event list with filters and a detail panel, projects and decoys (including when each decoy last
-fired), integration credentials, alert destinations and their delivery history, the audit log,
-evidence verification, users and tenants. It works on a phone, has light and dark themes, loads no
-third-party code, and passes an automated accessibility audit with no violations.
+A web console that works on a phone, with light and dark modes. It shows recent activity, the list of events with filters, your projects and bait, alert settings, the audit log, evidence checks and user management.
 
-People and access. Multiple tenants, each fully separated from the others. Three roles: system
-admin, tenant admin and read-only tenant user. Admins must use two-factor authentication, either an
-authenticator app or a passkey, which a fake sign-in page cannot steal. The console can be limited
-to your own addresses while decoys stay reachable from everywhere. Single sign-on through any OpenID
-Connect provider, and personal API keys with read or write scope for automation. New users get a
-one-time set-up link and choose their own password; nobody else ever knows it.
+Separate tenants, so different teams or customers never see each other's data. Three roles: system admin, tenant admin and read-only user.
 
-Evidence you can defend. Hash chains over detection events and over the audit log, checkpoints in
-write-once storage, a database role for the application that is not allowed to change or delete
-evidence, and a restore drill that checks every chain again after a backup is restored.
+Admins have to use two-factor login, either an authenticator app or a passkey. Single sign-on works with any OpenID Connect provider like Okta, Entra ID or Google. You can make personal API keys for scripts. You can also limit the console to your own IP addresses while the bait stays reachable from anywhere.
 
-Knowing it works. A watchdog sends a test hit through the public entry point every five minutes and
-checks it was recorded, along with the alert worker, failed alerts, backups, certificates and disk
-space. Problems go to a channel of your choice (ntfy, Slack, Discord, email), and a heartbeat lets
-an outside service tell you if the whole server stops. Nightly backups are encrypted with a key you
-keep off the server and copied to any S3-compatible bucket.
+A watchdog that sends a test hit every five minutes and checks it was recorded. It also keeps an eye on alerts, backups, certificates and disk space, and tells you if something is wrong.
 
-Decoys that blend in. Decoy URLs use path prefixes and a host name of your choosing, so nothing in a
-decoy points to HoneyShield.
+Nightly backups that are encrypted with a key you keep off the server, and can be copied to any S3-compatible storage.
 
-Operations. Runs with Docker Compose on a single host or on Kubernetes with the included Helm
-chart. Upgrades roll out without dropped requests, because database migrations are written so the
-running version keeps working while the next one migrates. Prometheus metrics and tested alert
-rules are included, along with a script that checks a whole deployment end to end.
+Bait that does not give itself away. You choose the URL paths and the domain name, so nothing in the bait points back to HoneyShield.
 
 
-## Build and run it from the source
+## Trying it from the source code
 
-You need Docker (Docker Desktop on a Mac or Windows) and `openssl`. It takes about ten minutes.
+You need Docker and openssl. It takes about ten minutes.
 
-```bash
 git clone https://github.com/karthikbalaji1111-wq/HoneyShield-source.git
+
 cd HoneyShield-source
+
 scripts/quickstart_env.sh
+
 docker compose --env-file .env.local up -d --build --wait
+
 docker compose --env-file .env.local exec backend python -m app.bootstrap --email you@example.com
-```
 
-The script writes `.env.local` with freshly generated secrets, a self-signed certificate, and two
-host names, `app.localhost` and `ingest.localhost`, which already point at your own machine. It
-never overwrites a file that exists. The last command asks you to choose the first administrator's
-password.
+The script makes a settings file with fresh secrets and a self-signed certificate. It never overwrites a file you already have. The last command asks you to pick the admin password.
 
-Then open https://app.localhost:8443/console/, accept the certificate warning (the certificate is
-self-signed) and sign in. You will be asked to set up two-factor authentication. A good first tour:
+Then open https://app.localhost:8443/console/ and log in. A good first try is to add a tenant, add a project, make a hidden URL, and open that URL in another tab. On your own computer, add :8443 after ingest.localhost in the address. The hit shows up under Events within a few seconds.
 
-1. Tenants: add one.
-2. Projects and decoys: add a project and generate a hidden URL.
-3. Open that URL in another tab. Generated URLs start with `https://ingest.localhost/`; on your
-   machine add the port, so `https://ingest.localhost:8443/...`.
-4. Events: the hit shows up within a few seconds. Open it to see everything that was recorded.
-
-To check the whole local stack end to end, the verification script exercises every decoy type,
-the integration hook, host separation, TLS, masking, evidence and rate limits:
-
-```bash
-HS_VERIFY_ADMIN_PASSWORD='the admin password' python3 scripts/verify_deployment.py \
-  --control-host app.localhost --ingest-host ingest.localhost \
-  --connect 127.0.0.1:8443 --http-connect 127.0.0.1:8080 --cacert proxy/certs/local-dev.crt \
-  --admin-email you@example.com --metrics-token "$(grep '^METRICS_TOKEN=' .env.local | cut -d= -f2-)" \
-  --totp-secret-file ~/.honeyshield-admin.totp --expect-replicas 2
-```
-
-Stop everything with `docker compose --env-file .env.local down`. Adding `-v` also deletes the local
-data.
+To stop it, run docker compose --env-file .env.local down. Add -v at the end if you also want to delete the local data.
 
 
 ## Running it for real
 
-- On one server: the install command above, then [docs/deployment-guide.md](docs/deployment-guide.md).
-- Step by step on a free cloud server: [docs/deploy-oracle-free.md](docs/deploy-oracle-free.md).
-- On Kubernetes with Helm: [docs/kubernetes.md](docs/kubernetes.md).
-- Before going live, work through [docs/release-checklist.md](docs/release-checklist.md).
+For one server, use the install command above and then read docs/deployment-guide.md.
 
-Every release publishes the backend, edge and database images for both x86 and ARM servers. Every
-image is scanned for known vulnerabilities before it is published and carries a list of its
-components (an SBOM) and a record of how it was built.
+For a free cloud server, step by step, read docs/deploy-oracle-free.md.
 
-A production deployment needs a few things only you can provide: two DNS names (one for operators,
-one for the decoys), certificates for them, a PostgreSQL database, an S3 bucket with Object Lock for
-evidence checkpoints, and wherever you want alerts to go. [docs/production-readiness.md](docs/production-readiness.md)
-lists what has been verified and what is still yours to do.
+For Kubernetes, read docs/kubernetes.md.
+
+Before you go live, go through docs/release-checklist.md.
+
+A real setup needs a few things only you can provide: two domain names, certificates for them, a PostgreSQL database, an S3 bucket with Object Lock for the evidence copies, and somewhere to send alerts. docs/production-readiness.md lists what has been checked and what is still up to you.
+
+Every release comes with ready-made images for normal and ARM servers. Each one is scanned for known security problems before it is published, comes with a list of everything inside it, and has a signed record of how it was built. docs/verify-it-yourself.md shows how to check all of that yourself.
 
 
-## How it is built
+## How it is put together
 
-The edge is nginx. It serves two host names and keeps them apart: the operator host carries the
-console and the API, while the ingest host accepts decoy hits and integration reports and nothing
-else. Behind it:
+In front is nginx. It answers on two names and keeps them apart. The console name serves the console and the API. The bait name only accepts bait hits and reports, nothing else.
 
-- the API, a FastAPI application (Python 3.12, SQLAlchemy 2, Pydantic 2), running as two or more
-  replicas;
-- an alert worker that delivers queued alerts;
-- an evidence checkpointer that seals the audit log and ships chain checkpoints to S3;
-- a watchdog and a backup service;
-- a retention job, when retention is enabled;
-- PostgreSQL 16, managed with Alembic migrations;
-- Valkey, a Redis-compatible store, for rate limits and live updates shared between API replicas.
-  It holds nothing that matters if it is lost.
+Behind that there is the API, written in Python with FastAPI, running as two or more copies. There is a worker that sends alerts, one that seals the evidence, a watchdog, a backup job, PostgreSQL 16 for the data, and Valkey for rate limits and live updates. Nothing important is lost if Valkey is lost.
 
-The code follows a plain layered layout. Routes in `app/api` handle HTTP and permissions, services
-in `app/services` hold the rules, repositories in `app/repositories` do the database work, and
-models in `app/models` describe the tables. [docs/architecture-as-is.md](docs/architecture-as-is.md)
-goes into detail, and [docs/security-model.md](docs/security-model.md) explains the trust
-boundaries.
+The code is laid out in plain layers. backend/app/api handles web requests and permissions, backend/app/services holds the rules, backend/app/repositories talks to the database, and backend/app/models describes the tables. The console is plain HTML, CSS and JavaScript in frontend/console. docs/architecture-as-is.md goes into more detail.
 
 
-## Repository layout
+## Working on the code
 
-- `backend/app`: the application. `api` (routes, sign-in, ingestion), `services`, `repositories`,
-  `models`, `schemas`, `core` (settings, security, logging), `db`, `middleware` and `workers`.
-- `backend/alembic`: database migrations.
-- `backend/tests`: the test suite.
-- `frontend/console`: the operator console. Plain HTML, CSS and JavaScript, served by the edge.
-- `proxy`: the nginx configuration for the edge.
-- `docker`: Dockerfiles for the backend, edge and database images.
-- `deploy/install`: the one-command installer. `deploy/helm/honeyshield`: the Helm chart.
-  `deploy/monitoring`: Prometheus alert rules and their tests.
-- `integrations/python`: the reference client for the integration hook.
-- `scripts`: quick start, deployment verification, backup and restore.
-- `docs`: everything else, listed below.
-
-
-## Developing
-
-```bash
 cd backend
-python3.12 -m venv .venv && . .venv/bin/activate
+
+python3.12 -m venv .venv
+
+. .venv/bin/activate
+
 pip install -r requirements.txt pytest pytest-asyncio httpx
+
 JWT_SECRET_KEY="$(openssl rand -hex 32)" APP_ENV=test pytest -q
-```
 
-That runs the suite on SQLite. The tests that need real PostgreSQL, S3 Object Lock or Valkey run
-when you point them at disposable instances with `HS_TEST_PG_ADMIN_URL`, `HS_TEST_S3_ENDPOINT`
-(plus `HS_TEST_S3_ACCESS_KEY` and `HS_TEST_S3_SECRET_KEY`) and `HS_TEST_REDIS_URL`; see
-[docs/testing-strategy.md](docs/testing-strategy.md).
+That runs the tests on SQLite. Some tests need a real PostgreSQL, S3 or Valkey, and docs/testing-strategy.md explains how to point them at throwaway ones.
 
-Database changes are Alembic migrations, written expand-first so the version already running keeps
-working during an upgrade. The rules are in
-[docs/database_migration_runbook.md](docs/database_migration_runbook.md).
-
-Every push runs the full suite with real PostgreSQL, S3 and Valkey (a skipped integration test
-fails the build), audits the Python dependencies for known vulnerabilities, checks the migrations
-upgrade, downgrade and upgrade again with no drift from the models, builds every image and scans it,
-validates the Compose files, the Helm chart, the nginx configuration and the Prometheus rules,
-runs contract tests on the console, runs Bandit and CodeQL, and installs a stack from source to
-self-test it and scan it with OWASP ZAP.
+Every change goes through the full test suite with real PostgreSQL, S3 and Valkey, a dependency security audit, migration checks, image builds and scans, Bandit and CodeQL, and a full install from source that gets scanned with OWASP ZAP.
 
 
-## Documentation
+## More reading
 
-- [Deployment guide](docs/deployment-guide.md) and [Kubernetes](docs/kubernetes.md)
-- [Environment configuration](docs/environment-configuration.md)
-- [Planting decoys](docs/honeytoken-deployment-guide.md) and [customer integrations](docs/customer-integrations.md)
-- [Alerting and the outbox](docs/alerting-and-outbox.md)
-- [Evidence integrity](docs/evidence-integrity.md) and [backup and restore](docs/backup-and-restore.md)
-- [Watchdog](docs/watchdog.md): self-test, notices and the dead-man's switch
-- [Decoys that do not look like HoneyShield](docs/decoy-paths.md)
-- [Passkeys and the operator allowlist](docs/passkeys.md) and [single sign-on](docs/sso.md)
-- [Monitoring and service levels](docs/monitoring-and-slos.md) and the [operations runbook](docs/operations-runbook.md)
-- [Incident response](docs/incident-response.md)
-- [Security model](docs/security-model.md), [threat model](docs/threat-model.md) and the
-  [security findings register](docs/security-findings-register.md)
-- [API reference](docs/api-reference.md)
-- [Console design notes](docs/console-design.md)
-- [Production readiness](docs/production-readiness.md) and the [audit report](docs/remediation-audit-report.md)
-- [Is it ready for companies?](docs/industry-readiness.md), a plain re-audit with what is still missing
-- [Verify it yourself](docs/verify-it-yourself.md): signed images, tests, security scans, fuzzing and the outage experiment
+Everything else is in the docs folder. Some good places to start:
 
-If this README and a document in `docs` ever disagree, the document is right.
+- docs/deployment-guide.md for setting it up
+- docs/honeytoken-deployment-guide.md for where to put bait
+- docs/active-directory-decoys.md for the Active Directory bait
+- docs/alerting-and-outbox.md for alerts, including Splunk and Sentinel
+- docs/evidence-integrity.md and docs/backup-and-restore.md for evidence and backups
+- docs/security-model.md and docs/threat-model.md for how it is protected
+- docs/industry-readiness.md for an honest look at what is still missing
+- docs/api-reference.md for the API
+
+If this file and something in docs ever disagree, trust the docs.
 
 
-## What is next
+## What I want to add next
 
-- Enrichment for attacker addresses, such as location, network owner and reputation.
-- Help from AI with reading attacker behaviour across many events.
+- More details about attacker addresses, like location, network owner and reputation.
+- Help from AI in making sense of what an attacker did across many events.
 - Scheduled reports.
-- Ready-made templates for managed cloud platforms.
+- Ready-made setups for the big cloud platforms.
 
 
-## Security
+## Security problems
 
-Please report vulnerabilities privately, as described in [SECURITY.md](SECURITY.md). Do not open a
-public issue for a security problem.
+If you find a security problem, please report it privately as described in SECURITY.md. Please do not open a public issue for it.
 
 
-## Licence
+## License
 
-HoneyShield is free for everyone to install and use, for any purpose, including inside a company.
-You may read, build and change the source for your own use, but not sell it, redistribute it or
-offer it as a hosted service. The full terms are in [LICENSE](LICENSE); it is not an open-source
-licence. Copyright 2026 Karthik Balaji. The open-source components HoneyShield includes, and their
-licences, are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+HoneyShield is free for anyone to install and use, for any purpose, including inside a company. You can read, build and change the code for your own use. You cannot sell it, share copies of it, or run it as a paid hosted service for others. The full terms are in LICENSE. It is not an open-source license.
+
+Copyright 2026 Karthik Balaji. The open-source parts HoneyShield uses, and their licenses, are listed in THIRD-PARTY-NOTICES.md.

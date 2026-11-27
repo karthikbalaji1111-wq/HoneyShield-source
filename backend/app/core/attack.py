@@ -24,6 +24,11 @@ TECHNIQUES: dict[str, tuple[str, tuple[str, ...]]] = {
     "T1005": ("Data from Local System", ("Collection",)),
     "T1039": ("Data from Network Shared Drive", ("Collection",)),
     "T1114": ("Email Collection", ("Collection",)),
+    "T1558.003": ("Steal or Forge Kerberos Tickets: Kerberoasting", ("Credential Access",)),
+    "T1110": ("Brute Force", ("Credential Access",)),
+    "T1078.002": ("Valid Accounts: Domain Accounts",
+                  ("Defense Evasion", "Persistence", "Privilege Escalation", "Initial Access")),
+    "T1087.002": ("Account Discovery: Domain Account", ("Discovery",)),
 }
 
 BY_DECOY_TYPE: dict[str, tuple[str, ...]] = {
@@ -34,19 +39,37 @@ BY_DECOY_TYPE: dict[str, tuple[str, ...]] = {
     "API_KEY": ("T1552.001", "T1078"),  # a key read from a file, then used
     "DNS": ("T1552.001", "T1083"),      # a host name read from a config file, then connected to
     "AWS_KEY": ("T1552.001", "T1078.004"),
+    "AD_ACCOUNT": ("T1087.002", "T1110", "T1558.003"),  # found by enumeration, then tried or roasted
     "FORM_FIELD": (),
 }
 
+#: Active Directory decoys: what the domain controller saw says which technique it was. The event's
+#: request_path is "ad/<kind>" (app/services/directory.py).
+BY_DIRECTORY_EVENT: dict[str, tuple[str, ...]] = {
+    "ad/service-ticket": ("T1558.003",),   # 4769: a ticket for the decoy's SPN, the Kerberoasting step
+    "ad/preauth-failure": ("T1110",),      # 4771: Kerberos sign-in with a wrong password
+    "ad/tgt-failure": ("T1110",),          # 4768 failed
+    "ad/logon-failure": ("T1110",),        # 4625
+    "ad/ntlm-failure": ("T1110",),         # 4776 failed
+    "ad/logon-success": ("T1078.002",),    # 4624: someone has the password
+    "ad/tgt-issued": ("T1078.002",),       # 4768 succeeded
+    "ad/ntlm-validated": ("T1078.002",),   # 4776 succeeded
+    "ad/object-read": ("T1087.002",),      # 4662: the account object was read (enumeration)
+}
 
-def techniques_for(decoy_type: str | None) -> list[dict[str, Any]]:
-    """[{"id", "name", "tactics", "url"}] for a decoy type; empty when nothing fits."""
+
+def technique_ids(decoy_type: str | None, request_path: str | None = None) -> list[str]:
+    """Technique ids for a decoy type, narrowed by the event where the event says more."""
+    if decoy_type == "AD_ACCOUNT" and request_path in BY_DIRECTORY_EVENT:
+        return list(BY_DIRECTORY_EVENT[request_path])
+    return list(BY_DECOY_TYPE.get(decoy_type or "", ()))
+
+
+def techniques_for(decoy_type: str | None, request_path: str | None = None) -> list[dict[str, Any]]:
+    """[{"id", "name", "tactics", "url"}] for a decoy type (and event); empty when nothing fits."""
     out = []
-    for tid in BY_DECOY_TYPE.get(decoy_type or "", ()):
+    for tid in technique_ids(decoy_type, request_path):
         name, tactics = TECHNIQUES[tid]
         out.append({"id": tid, "name": name, "tactics": list(tactics),
                     "url": "https://attack.mitre.org/techniques/" + tid.replace(".", "/") + "/"})
     return out
-
-
-def technique_ids(decoy_type: str | None) -> list[str]:
-    return list(BY_DECOY_TYPE.get(decoy_type or "", ()))

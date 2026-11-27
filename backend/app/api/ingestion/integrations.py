@@ -1,7 +1,9 @@
 """CUSTOMER_HOOK endpoints served on the ingest host (signed requests only).
 
-GET  /integrations/v1/manifest  -> decoys the customer's middleware should recognise
-POST /integrations/v1/events    -> report one decoy interaction (always 202 when authenticated)
+GET  /integrations/v1/manifest            -> decoys the customer's middleware should recognise
+POST /integrations/v1/events              -> report one decoy interaction (always 202 when authenticated)
+GET  /integrations/v1/directory-manifest  -> Active Directory decoy accounts for the DC collector
+POST /integrations/v1/directory-events    -> report one Windows Security event about a decoy account
 
 Responses for authenticated reports never reveal whether a decoy_id exists, belongs to
 another project, or was a duplicate: all are 202. Authentication failures are 401 with one
@@ -29,9 +31,10 @@ from app.core.rate_limit import (
     integration_report_limiter,
 )
 from app.db.session import get_db
-from app.schemas.integration import IntegrationReport
+from app.schemas.integration import DirectoryReport, IntegrationReport
 from app.api.dependencies import get_audit_log_service
 from app.services.detection_event import DetectionEventService
+from app.services.directory import DirectoryReportService
 from app.services.integration import IntegrationReportService
 
 logger = logging.getLogger(__name__)
@@ -134,27 +137,75 @@ async def post_event(
         session.commit()
         return _json(422, {"detail": "Report validation failed"})
 
-    settings = get_settings()
-    count = (integration_evidence_counter.increment(f"hook:{cred.id}:{token.id}:{report.source_ip}")
-             if settings.rate_limit_enabled else None)
-    if count is not None and count > EVIDENCE_CAP_PER_MINUTE:
-        if count == EVIDENCE_CAP_PER_MINUTE + 1:
-            audit.record_action(
-                event_type="DETECTION_HITS_SUPPRESSED",
-                severity="WARNING",
-                message=f"More than {EVIDENCE_CAP_PER_MINUTE} integration reports per minute for one decoy "
-                        "and source; further reports in this window are not stored individually",
-                actor_source="integration",
-                target_entity="honey_token",
-                target_id=token.id,
-                tenant_id=cred.project.tenant_id,
-                project_id=cred.project_id,
-                event_metadata={"ip_address": report.source_ip, "integration_id": cred.public_id,
-                                "per_minute_cap": EVIDENCE_CAP_PER_MINUTE},
-            )
-            session.commit()
+    if _over_evidence_cap(session, audit, cred, token, report.source_ip):
         return _json(202, _ACCEPTED)
 
     stored = reports.record(cred, token, report, event_service)
+    metrics.inc("honeyshield_integration_reports_total", outcome="recorded" if stored else "duplicate")
+    return _json(202, _ACCEPTED)
+
+
+def _over_evidence_cap(session: Session, audit, cred, token, source: str | None) -> bool:
+    """True once one decoy and source passed the per-minute cap; the first excess leaves an audit mark."""
+    settings = get_settings()
+    count = (integration_evidence_counter.increment(f"hook:{cred.id}:{token.id}:{source}")
+             if settings.rate_limit_enabled else None)
+    if count is None or count <= EVIDENCE_CAP_PER_MINUTE:
+        return False
+    if count == EVIDENCE_CAP_PER_MINUTE + 1:
+        audit.record_action(
+            event_type="DETECTION_HITS_SUPPRESSED",
+            severity="WARNING",
+            message=f"More than {EVIDENCE_CAP_PER_MINUTE} integration reports per minute for one decoy "
+                    "and source; further reports in this window are not stored individually",
+            actor_source="integration",
+            target_entity="honey_token",
+            target_id=token.id,
+            tenant_id=cred.project.tenant_id,
+            project_id=cred.project_id,
+            event_metadata={"ip_address": source, "integration_id": cred.public_id,
+                            "per_minute_cap": EVIDENCE_CAP_PER_MINUTE},
+        )
+        session.commit()
+    return True
+
+
+@router.get("/directory-manifest", summary="Active Directory decoy accounts for the DC collector (signed)")
+async def get_directory_manifest(request: Request, session: Annotated[Session, Depends(get_db)]):
+    cred, _, error = await _authenticate(request, session, "manifest")
+    if error is not None:
+        return error
+    return _json(200, DirectoryReportService(session).manifest(cred))
+
+
+@router.post("/directory-events", status_code=202, summary="Report a Windows Security event about a decoy account (signed)")
+async def post_directory_event(
+    request: Request,
+    session: Annotated[Session, Depends(get_db)],
+    event_service: Annotated[DetectionEventService, Depends(get_detection_event_service)],
+):
+    cred, body, error = await _authenticate(request, session, "report")
+    if error is not None:
+        return error
+    try:
+        report = DirectoryReport.model_validate(json.loads(body or b"null"))
+    except (ValueError, PydanticValidationError):
+        return _json(422, {"detail": "Report validation failed"})
+
+    directory = DirectoryReportService(session)
+    token = directory.resolve(cred, report.decoy_id)
+    if token is None:
+        logger.info("Integration %s reported an unknown directory decoy", cred.public_id)
+        return _json(202, _ACCEPTED)
+    if not directory.names_match(token, report):
+        # Authenticated, own project: saying so helps the operator find a broken collector.
+        logger.warning("Integration %s reported an event for another account on %s", cred.public_id, token.decoy_id)
+        metrics.inc("honeyshield_integration_reports_total", outcome="directory_name_mismatch")
+        return _json(422, {"detail": "Report validation failed"})
+
+    audit = get_audit_log_service(session, None)
+    if _over_evidence_cap(session, audit, cred, token, report.source_ip or report.workstation):
+        return _json(202, _ACCEPTED)
+    stored = directory.record(cred, token, report, event_service)
     metrics.inc("honeyshield_integration_reports_total", outcome="recorded" if stored else "duplicate")
     return _json(202, _ACCEPTED)

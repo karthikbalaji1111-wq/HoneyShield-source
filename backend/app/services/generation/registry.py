@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Mapping
 
 from app.models.enums import HoneyTokenType
+from app.services.generation.ad_account import AdAccountGenerator
 from app.services.generation.api_key import ApiKeyGenerator
 from app.services.generation.aws_key import AwsKeyGenerator
 from app.services.generation.base import BaseGenerator
@@ -24,4 +25,5 @@ GENERATOR_REGISTRY: dict[HoneyTokenType, BaseGenerator] = {
     HoneyTokenType.DNS: DnsGenerator(),
     HoneyTokenType.AWS_KEY: AwsKeyGenerator(),
     HoneyTokenType.DOCUMENT: DocumentGenerator(),
+    HoneyTokenType.AD_ACCOUNT: AdAccountGenerator(),
 }

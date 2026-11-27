@@ -212,12 +212,18 @@
             <option value="API_KEY">Fake API key (needs integration)</option>
             <option value="DNS">DNS host name</option>
             <option value="AWS_KEY">AWS access key (real, can do nothing)</option>
+            <option value="AD_ACCOUNT">Active Directory account (needs the DC collector)</option>
           </select>
           <select name="provider_style" aria-label="Key style" hidden>
             <option value="">Generic key format</option><option value="stripe">Looks like a Stripe key</option><option value="openai">Looks like an OpenAI key</option>
           </select>
           <select name="template" aria-label="Document" hidden>
             <option value="">Any document</option><option value="vpn_access">Contractor VPN access</option><option value="server_inventory">Server inventory and admin accounts</option><option value="salary_review">Salary review (draft)</option><option value="board_minutes">Board minutes (confidential)</option>
+          </select>
+          <input name="account_name" aria-label="Account name" placeholder="Account name (optional)" maxlength="20"
+                 pattern="[A-Za-z][A-Za-z0-9._\-]{0,19}" autocomplete="off" spellcheck="false" hidden>
+          <select name="audit_reads" aria-label="What to detect" hidden>
+            <option value="">Sign-ins and Kerberoasting</option><option value="1">Also reads of the account (noisier)</option>
           </select>
           <button type="submit">Generate decoy</button>
         </form>
@@ -274,12 +280,12 @@
 
     <!-- ============================================================ alerts -->
     <section id="view-alerts" class="view" hidden>
-      <div class="page-head"><div><h1>Alerts</h1><p class="sub">Where alerts go when a decoy fires: signed webhooks, Slack or Teams, email, or a SIEM over syslog.</p></div></div>
+      <div class="page-head"><div><h1>Alerts</h1><p class="sub">Where alerts go when a decoy fires: signed webhooks, Slack or Teams, email, PagerDuty, Splunk, Microsoft Sentinel, or any SIEM over syslog.</p></div></div>
       <div class="panel">
         <div class="panel-head"><h2>Destinations</h2></div>
         <form method="post" id="alert-form" class="form-grid">
           <label>Type
-            <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option><option value="PAGERDUTY">PagerDuty</option></select></label>
+            <select name="format"><option value="HONEYSHIELD">Signed JSON webhook</option><option value="SLACK">Slack or Teams</option><option value="EMAIL">Email</option><option value="SYSLOG_CEF">SIEM (syslog + CEF)</option><option value="PAGERDUTY">PagerDuty</option><option value="SPLUNK_HEC">Splunk (HTTP Event Collector)</option><option value="SENTINEL">Microsoft Sentinel</option></select></label>
           <label class="span-2">Address
             <input name="url" required maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="alert-url-hint">
             <span id="alert-url-hint" class="hint"></span></label>

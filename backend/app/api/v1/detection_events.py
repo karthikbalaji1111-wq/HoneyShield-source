@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, Query, Response, status
 
 from app.api.dependencies import CurrentUser, TenantAdminRequired, get_detection_event_service
 from app.schemas.detection_event import (
+    AttackTechnique,
     DetectionEventActivityDay,
     DetectionEventCreate,
     DetectionEventResponse,
@@ -162,7 +163,7 @@ def _event_view(event, unmasked: bool) -> DetectionEventResponse:
     # Decoy identity helps triage; the secret token value is never part of the response.
     view.decoy_id, view.decoy_type, view.decoy_label = token.decoy_id, token.token_type.value, token.label
     view.project_domain = token.project.domain if token.project else None
-    view.attack = techniques_for(view.decoy_type)
+    view.attack = [AttackTechnique(**t) for t in techniques_for(view.decoy_type, event.request_path)]
     if not unmasked:
         secret = token.token_value
         view.request_path = redact(view.request_path, secret)

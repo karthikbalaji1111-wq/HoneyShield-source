@@ -1010,7 +1010,7 @@ async function selectProject(p) {
 
 const DECOY_TYPES = { URL: "Hidden URL", LINK: "Hidden link", PIXEL: "Tracking pixel",
                       FORM_FIELD: "Form honeypot", API_KEY: "Fake API key", DNS: "DNS host name",
-                      AWS_KEY: "AWS access key", DOCUMENT: "Word document" };
+                      AWS_KEY: "AWS access key", DOCUMENT: "Word document", AD_ACCOUNT: "AD account" };
 
 // DNS and AWS key decoys need a service of their own; options this installation cannot watch are
 // disabled (the server refuses them anyway) and say why.
@@ -1055,6 +1055,8 @@ async function loadTokens() {
 $("#generate-form [name=token_type]").addEventListener("change", (e) => {
   $("#generate-form [name=provider_style]").hidden = e.target.value !== "API_KEY";
   $("#generate-form [name=template]").hidden = e.target.value !== "DOCUMENT";
+  $("#generate-form [name=account_name]").hidden = e.target.value !== "AD_ACCOUNT";
+  $("#generate-form [name=audit_reads]").hidden = e.target.value !== "AD_ACCOUNT";
 });
 
 const GUIDANCE = {
@@ -1065,6 +1067,7 @@ const GUIDANCE = {
   API_KEY: "Plant the key in decoy config files and repositories. Detection needs the HoneyShield hook in your authentication middleware. Use against third-party APIs is not detectable.",
   DNS: "Plant the host name where an intruder would use it: config files, SSH configs, backup scripts, internal docs. Any lookup is recorded with the resolver that asked, so it works from networks that block everything but DNS. Nothing in front of the name is needed, but anything there (a machine name, a username) is recorded too.",
   DOCUMENT: "Download the Word file and leave it where an intruder would open it: file shares, home folders, backup archives, mailboxes. Opening it in Word loads a 1-pixel picture from HoneyShield and is recorded as HIGH. Word's Protected View (files marked as downloaded from the internet) holds the picture back until editing is enabled, so plant the file, don't email it.",
+  AD_ACCOUNT: "A domain account nobody uses, with a password nobody knows. Any sign-in attempt with it, or any Kerberos ticket requested for its SPN (Kerberoasting), is reported by the collector on your domain controllers as CRITICAL within about a minute. The account is in no groups and can do nothing.",
   AWS_KEY: "A real AWS key with a deny-all policy: plant it in ~/.aws/credentials, CI variables, .env files or repositories. Any use of it, from any tool, is read from CloudTrail and alerted as CRITICAL, usually within 20 minutes. It can do nothing in your AWS account.",
 };
 
@@ -1119,6 +1122,7 @@ function showArtifact(t) {
     if (m.tagged_example) items.push(copyBlock("with a tag in front (recorded too)", m.tagged_example));
   }
   if (t.token_type === "AWS_KEY") items.push(...awsKeyArtifact(t));
+  if (t.token_type === "AD_ACCOUNT") items.push(...adAccountArtifact(t));
   if ((t.files || []).length) items.push(el("div", { class: "bait-files" }, el("strong", {}, "Download as:"),
     ...t.files.map((kind) => el("button", { class: "secondary", type: "button",
       onclick: () => downloadBaitFile(t, kind) }, BAIT_FILES[kind] || kind))));
@@ -1131,7 +1135,22 @@ function showArtifact(t) {
 
 // Ready-to-plant files carrying the decoy (GET /api/v1/honey-tokens/{decoy_id}/files/{kind}).
 const BAIT_FILES = { "aws-credentials": "~/.aws/credentials", env: ".env file", kubeconfig: "kubeconfig",
-                     "ssh-config": "SSH config", docx: "Word document" };
+                     "ssh-config": "SSH config", docx: "Word document",
+                     "setup-script": "Setup script (run once)", "dc-collector": "DC collector" };
+
+// An AD decoy is set up in the customer's directory: what to run, where, and in which order.
+function adAccountArtifact(t) {
+  const m = t.metadata || {};
+  const items = [copyBlock("account name", m.account_name || "")];
+  if (m.spn) items.push(copyBlock("SPN (the domain is added on the controller)", m.spn));
+  items.push(el("ol", { class: "steps" },
+    el("li", {}, "Create an integration credential for this project (Integrations) and keep its secret."),
+    el("li", {}, "Download the setup script and run it once as a Domain Admin. Add -Path with the OU of your service accounts."),
+    el("li", {}, "Download the DC collector and, on every domain controller, run it with -Install -IntegrationId <id>. It asks for the secret."),
+    el("li", {}, "Run the collector with -Test to check the audit policy and the connection.")));
+  if (m.audit_reads) items.push(el("p", { class: "muted" }, "Reads are audited too: enumeration tools that read every account (BloodHound, PowerView) trigger HIGH events. So can inventory or sync tools; see docs/active-directory-decoys.md."));
+  return items;
+}
 
 async function downloadBaitFile(t, kind) {
   busy(1);
@@ -1185,7 +1204,9 @@ $("#generate-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const params = f.get("token_type") === "API_KEY" && f.get("provider_style") ? { provider_style: f.get("provider_style") }
-    : f.get("token_type") === "DOCUMENT" && f.get("template") ? { template: f.get("template") } : undefined;
+    : f.get("token_type") === "DOCUMENT" && f.get("template") ? { template: f.get("template") }
+    : f.get("token_type") === "AD_ACCOUNT" ? Object.assign({ audit_reads: f.get("audit_reads") === "1" },
+        f.get("account_name") ? { account_name: f.get("account_name").trim() } : {}) : undefined;
   try {
     const t = await api("POST", `/api/v1/projects/${encodeURIComponent(state.project.domain)}/honey-tokens/generate`,
                         { token_type: f.get("token_type"), generator_params: params });
@@ -1195,7 +1216,10 @@ $("#generate-form").addEventListener("submit", async (e) => {
 });
 
 async function rotate(t) {
-  if (!confirm("Rotate this decoy? The old value is revoked (its future triggers are still recorded) and a new artifact is issued that you must redeploy.")) return;
+  const note = t.token_type === "AD_ACCOUNT"
+    ? "Rotate this decoy? It gets a new id but keeps the same account: nothing changes in Active Directory."
+    : "Rotate this decoy? The old value is revoked (its future triggers are still recorded) and a new artifact is issued that you must redeploy.";
+  if (!confirm(note)) return;
   try { const nt = await api("POST", "/api/v1/honey-tokens/rotate", { old_token_value: t.token_value }); await loadTokens(); showArtifact(nt); } catch {}
 }
 
@@ -1300,6 +1324,7 @@ function openEvent(e, fromRow) {
     ? el("table", { class: "kv" }, el("tbody", {}, Object.entries(e.headers).map(([k, v]) =>
         el("tr", {}, el("th", { scope: "row" }, k), el("td", { class: "mono" }, String(v))))))
     : el("p", { class: "muted small" }, "No headers were captured.");
+  const contextTitle = { AD: "Directory event", AWS: "Cloud event" }[e.http_method] || "Request headers";
   const utc = new Date(e.triggered_at);
   $("#event-detail").replaceChildren(
     el("section", { class: "drawer-section" }, el("h3", {}, "What happened"),
@@ -1327,7 +1352,7 @@ function openEvent(e, fromRow) {
         detailRow("Decoy id", e.decoy_id, true),
         detailRow("Project", e.project_domain, true),
       ].flat().filter(Boolean))),
-    el("section", { class: "drawer-section" }, el("h3", {}, "Request headers"), headers),
+    el("section", { class: "drawer-section" }, el("h3", {}, contextTitle), headers),
     el("div", { class: "drawer-actions" },
       // "All events from this address": the address alone, whatever was filtered before, and from
       // whichever page the panel was opened (an alert delivery, the overview).
@@ -1411,6 +1436,10 @@ const ALERT_FORMATS = {
                 hint: "Syslog over TLS (RFC 5425) carrying an ArcSight CEF message." },
   PAGERDUTY: { name: "PagerDuty", placeholder: "pagerduty://<integration key>",
                hint: "The Integration Key of an Events API v2 integration. Use pagerduty+eu:// for an EU account." },
+  SPLUNK_HEC: { name: "Splunk", placeholder: "splunk://<HEC token>@hec.example.com:8088?index=security",
+                hint: "An HTTP Event Collector token and host (Splunk Cloud: http-inputs-<stack>.splunkcloud.com:443). index= is optional. The token is masked once saved." },
+  SENTINEL: { name: "Microsoft Sentinel", placeholder: "sentinel://<client id>:<secret>@<DCR ingestion host>/<dcr-…>/Custom-HoneyShield?tenant=<tenant id>",
+              hint: "An Entra app with Monitoring Metrics Publisher on the data collection rule from deploy/sentinel. Percent-encode the secret. It is masked once saved." },
 };
 const SEND_FROM = { LOW: "Every event", MEDIUM: "Medium and above", HIGH: "High and above", CRITICAL: "Critical only" };
 

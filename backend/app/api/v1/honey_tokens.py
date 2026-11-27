@@ -32,7 +32,8 @@ def available_types(_user: CurrentUser) -> dict[str, dict[str, bool]]:
 
     settings = get_settings()
     needs = {HoneyTokenType.DNS: bool(settings.dns_token_zone), HoneyTokenType.AWS_KEY: settings.aws_canary_enabled,
-             HoneyTokenType.DOCUMENT: bool(settings.public_ingest_base_url)}
+             HoneyTokenType.DOCUMENT: bool(settings.public_ingest_base_url),
+             HoneyTokenType.AD_ACCOUNT: bool(settings.integration_signing_key)}
     return {"types": {t.value: needs.get(t, True) for t in HoneyTokenType}}
 
 
@@ -40,7 +41,8 @@ def available_types(_user: CurrentUser) -> dict[str, dict[str, bool]]:
     "/{decoy_id}/files/{kind}",
     summary="Download a decoy as a ready-to-plant file",
     description="The decoy inside a file intruders look for: aws-credentials and env (AWS key), kubeconfig, "
-                "ssh-config and env (DNS), env (API key), docx (document). TENANT_ADMIN or above; every "
+                "ssh-config and env (DNS), env (API key), docx (document), "
+                "setup-script and dc-collector (Active Directory account). TENANT_ADMIN or above; every "
                 "download is audited.",
     response_class=Response,
     responses={status.HTTP_404_NOT_FOUND: {"model": ErrorResponse, "description": "No such active decoy."},
